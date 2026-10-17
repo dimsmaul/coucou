@@ -55,6 +55,7 @@ struct PillDefinition {
         switch id {
         case "integration_claude": return "Claude Code"
         case "agent_cursor":       return "Cursor"
+        case "agent_vscodium":     return "VSCodium"
         case "agent_codex":        return "Codex"
         case "agent_hermes":       return "Hermes"
         case "agent_claude-desktop": return "Claude Desktop"
@@ -72,6 +73,8 @@ enum PillCatalog {
         .init(id: "integration_claude",  name: "VS Code",     color: "#F5F6F8",
               category: .workspace, subtitle: "Integration",  source: .claudeCode),
         .init(id: "agent_cursor",        name: "Cursor",      color: "#C0C4CC",
+              category: .workspace, subtitle: "Integration",  source: .agent),
+        .init(id: "agent_vscodium",      name: "VSCodium",    color: "#2F80ED",
               category: .workspace, subtitle: "Integration",  source: .agent),
         .init(id: "agent_antigravity",   name: "Antigravity", color: "#E879F9",
               category: .workspace, subtitle: "Integration",  source: .agent,  githubOnly: true),
@@ -105,6 +108,12 @@ enum PillCatalog {
               category: .ai,        subtitle: "Chat",         source: .n8n),
         .init(id: "ai_lmstudio",         name: "LM Studio",   color: ChatProvider.lmstudio.accentHex,
               category: .ai,        subtitle: "Chat",         source: .n8n),
+        .init(id: "ai_openrouter",       name: "OpenRouter",  color: ChatProvider.openrouter.accentHex,
+              category: .ai,        subtitle: "Chat",         source: .n8n),
+        .init(id: "ai_antigravity",      name: "Antigravity", color: ChatProvider.antigravity.accentHex,
+              category: .ai,        subtitle: "Chat",         source: .n8n, githubOnly: true),
+        .init(id: "ai_zed",              name: "Zed AI",      color: ChatProvider.zed.accentHex,
+              category: .ai,        subtitle: "Chat",         source: .n8n, githubOnly: true),
         // ── Services ─────────────────────────────────────────────────────────
         .init(id: "integration_resend",  name: "Resend",      color: "#22C55E",
               category: .service,   subtitle: "Integration",  source: .n8n),
@@ -113,6 +122,8 @@ enum PillCatalog {
         .init(id: "integration_vercel",  name: "Vercel",      color: "#7C5CFF",
               category: .service,   subtitle: "Integration",  source: .n8n),
         .init(id: "integration_github",  name: "GitHub",      color: "#F4505E",
+              category: .service,   subtitle: "Integration",  source: .n8n),
+        .init(id: "integration_huggingface", name: "Hugging Face", color: "#FFD21E",
               category: .service,   subtitle: "Integration",  source: .n8n),
         .init(id: "integration_notion",  name: "Notion",      color: "#8C8C8C",
               category: .service,   subtitle: "Integration",  source: .n8n),

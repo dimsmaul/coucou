@@ -6,6 +6,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem?
     private(set) var islandController: IslandWindowController?
     private var demoMenuItem: NSMenuItem?
+    private var githubAccountMenuItem: NSMenuItem?
 
     func applicationWillTerminate(_ notification: Notification) {
         #if !APPSTORE
@@ -48,6 +49,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         #if PHONE_LINK
         CloudProbe.shared.startIfEnabled()
         #endif
+        DiscordBotListener.shared.start()
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -109,6 +111,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let demoItem = NSMenuItem(title: NSLocalizedString("Demo mode", comment: ""), action: #selector(toggleDemoMode), keyEquivalent: "")
         demoMenuItem = demoItem
         menu.addItem(demoItem)
+        menu.addItem(.separator())
+        let ghItem = NSMenuItem(title: "GitHub Account", action: nil, keyEquivalent: "")
+        let ghSubmenu = NSMenu(title: "GitHub Account")
+        ghItem.submenu = ghSubmenu
+        githubAccountMenuItem = ghItem
+        menu.addItem(ghItem)
         menu.addItem(.separator())
         menu.addItem(withTitle: NSLocalizedString("Open Coucou", comment: ""), action: #selector(openIsland), keyEquivalent: "")
         menu.addItem(.separator())
@@ -273,20 +281,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         StripePoller.shared.start()
         CalcomPoller.shared.start()
         NotionPoller.shared.start()
+        HuggingFacePoller.shared.start()
         NotificationCenter.default.addObserver(self, selector: #selector(openSettingsFromNotification(_:)),
                                                name: .openFullSettings, object: nil)
         // After the greeting ends, fly Mochi back to the desktop if it was there at last quit
         NotificationCenter.default.addObserver(forName: .greetComplete, object: nil, queue: .main) { [weak self] _ in
-            DesktopMochiController.shared.launchFlyIfNeeded()
-            self?.checkMondayRecap()
+            MainActor.assumeIsolated {
+                DesktopMochiController.shared.launchFlyIfNeeded()
+                self?.checkMondayRecap()
+            }
         }
         // Check for Monday recap on wake and when a new session/prompt arrives
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification,
                                                           object: nil, queue: .main) { [weak self] _ in
-            self?.checkMondayRecap()
+            MainActor.assumeIsolated { self?.checkMondayRecap() }
         }
         NotificationCenter.default.addObserver(forName: .checkMondayRecap, object: nil, queue: .main) { [weak self] _ in
-            self?.checkMondayRecap()
+            MainActor.assumeIsolated { self?.checkMondayRecap() }
         }
         #if !APPSTORE
         _ = MusicController.shared
@@ -305,5 +316,52 @@ extension AppDelegate: NSMenuDelegate {
         demoMenuItem?.title = DemoEngine.shared.isActive
             ? NSLocalizedString("demo.stop", comment: "")
             : NSLocalizedString("Demo mode", comment: "")
+        updateGitHubAccountMenu()
+    }
+
+    private func updateGitHubAccountMenu() {
+        guard let ghMenu = githubAccountMenuItem?.submenu else { return }
+        ghMenu.removeAllItems()
+
+        let mgr = GitHubAccountManager.shared
+        if let active = mgr.activeAccount {
+            githubAccountMenuItem?.title = "GitHub: @\(active.username)"
+        } else {
+            githubAccountMenuItem?.title = "GitHub Account"
+        }
+
+        if mgr.accounts.isEmpty {
+            let emptyItem = NSMenuItem(title: "No gh accounts found", action: nil, keyEquivalent: "")
+            emptyItem.isEnabled = false
+            ghMenu.addItem(emptyItem)
+        } else {
+            for acc in mgr.accounts {
+                let item = NSMenuItem(
+                    title: "@\(acc.username)" + (acc.isActive ? " (Active)" : ""),
+                    action: #selector(switchGitHubAccountFromMenu(_:)),
+                    keyEquivalent: ""
+                )
+                item.target = self
+                item.representedObject = acc.username
+                item.state = acc.isActive ? .on : .off
+                ghMenu.addItem(item)
+            }
+        }
+
+        ghMenu.addItem(.separator())
+        let refreshItem = NSMenuItem(title: "Refresh Accounts", action: #selector(refreshGitHubAccountsFromMenu), keyEquivalent: "")
+        refreshItem.target = self
+        ghMenu.addItem(refreshItem)
+    }
+
+    @objc private func switchGitHubAccountFromMenu(_ sender: NSMenuItem) {
+        guard let username = sender.representedObject as? String else { return }
+        Task { @MainActor in
+            await GitHubAccountManager.shared.switchAccount(to: username)
+        }
+    }
+
+    @objc private func refreshGitHubAccountsFromMenu() {
+        GitHubAccountManager.shared.refresh()
     }
 }

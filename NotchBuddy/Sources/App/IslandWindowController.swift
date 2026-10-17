@@ -133,6 +133,13 @@ final class IslandWindowController: NSWindowController {
                     NotificationCenter.default.post(name: .botMorphTo, object: CGFloat(1))
                     return
                 }
+                #if !APPSTORE
+                // Pouch on: the files go to the shelf, no upload sequence.
+                if Pouch.shared.isEnabled {
+                    NotificationCenter.default.post(name: .hookExpand, object: IslandView.pouch)
+                    return
+                }
+                #endif
                 // enterZone sets isActive=true BEFORE hookExpand triggers re-render,
                 // so IslandContainer sees isActive=true when state.view becomes .upload.
                 UploadSequenceEngine.shared.enterZone(x: iLoc.x, y: iLoc.y)
@@ -166,6 +173,13 @@ final class IslandWindowController: NSWindowController {
                 // The mail card prepared by voice (Claude) is open: the file is its attachment.
                 if AppState.shared.voiceMailDraft != nil, AppState.shared.view == .mail, let url = urls.first {
                     self?.attachToVoiceMailCard(url)
+                    return
+                }
+                // Pouch on: every dropped file waits on the shelf (by reference, nothing copied).
+                if Pouch.shared.isEnabled {
+                    Pouch.shared.store.add(urls)
+                    AppState.shared.fileDragOver = false
+                    SoundEngine.shared.play("approve")
                     return
                 }
                 #endif
@@ -321,10 +335,10 @@ final class IslandWindowController: NSWindowController {
         NotificationCenter.default.addObserver(
             forName: .greetComplete, object: nil, queue: .main
         ) { [weak self] _ in
-            self?.fsm.greetComplete()
+            MainActor.assumeIsolated { self?.fsm.greetComplete() }
         }
 
-        // An approval, or an email prepared by voice, stays open until I click.
+        // An approval or an email prepared by voice refuses to fold automatically.
         fsm.isHeldOpen = { AppState.shared.pendingApproval != nil || AppState.shared.voiceMailDraft != nil }
 
         // Voice: wake phrase detected → open listening island
@@ -866,51 +880,76 @@ final class IslandWindowController: NSWindowController {
         // Hook server expand requests (alerts only)
         NotificationCenter.default.addObserver(forName: .hookExpand, object: nil, queue: .main) { [weak self] note in
             guard let self, let view = note.object as? IslandView else { return }
-            self.fsm.openedExternally()
-            self.expand(to: view)
+            MainActor.assumeIsolated {
+                self.fsm.openedExternally()
+                self.expand(to: view)
+            }
         }
 
         // Hook server compact reveal (non-alert work events: session start, tool use, etc.)
         NotificationCenter.default.addObserver(forName: .hookReveal, object: nil, queue: .main) { [weak self] _ in
             guard let self else { return }
-            self.fsm.reveal()
+            MainActor.assumeIsolated { self.fsm.reveal() }
         }
 
         // Music started playing: reveal silently (no peek sound)
         NotificationCenter.default.addObserver(forName: .musicReveal, object: nil, queue: .main) { [weak self] _ in
             guard let self else { return }
-            self.silentNextReveal = true
-            self.fsm.reveal()
-            self.silentNextReveal = false
+            MainActor.assumeIsolated {
+                self.silentNextReveal = true
+                self.fsm.reveal()
+                self.silentNextReveal = false
+            }
+        }
+
+        // Pomodoro / Time Tracker state changed: reveal compact island if active, or sync mode
+        NotificationCenter.default.addObserver(forName: .pomodoroStateChanged, object: nil, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            MainActor.assumeIsolated {
+                if PomodoroManager.shared.isActive {
+                    if self.state.mode == .hidden {
+                        self.fsm.reveal()
+                    }
+                } else {
+                    self.state.syncMode()
+                    if self.state.tasks.isEmpty && !self.wasInIsland {
+                        self.fsm.mouseLeft()
+                    }
+                }
+            }
         }
 
         // Email prepared by voice: open the mail card, filled in, for me to check and send.
         NotificationCenter.default.addObserver(forName: .voiceShowMailCard, object: nil, queue: .main) { [weak self] _ in
             guard let self else { return }
-            self.fsm.openedExternally()
-            self.expand(to: .mail)
+            MainActor.assumeIsolated {
+                self.fsm.openedExternally()
+                self.expand(to: .mail)
+            }
         }
 
         // Collapse requests from views (OK button, etc.)
         NotificationCenter.default.addObserver(forName: .islandCollapse, object: nil, queue: .main) { [weak self] _ in
-            self?.collapse()
+            MainActor.assumeIsolated { self?.collapse() }
         }
 
         // Wardrobe open/close from desktop Mochi right-click (does NOT post .hookExpand)
         NotificationCenter.default.addObserver(forName: .openWardrobeFromDesktop, object: nil, queue: .main) { [weak self] _ in
             guard let self else { return }
-            if self.state.mode == .expanded && self.state.view == .wardrobe {
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                    self.state.view = .overview
+            MainActor.assumeIsolated {
+                if self.state.mode == .expanded && self.state.view == .wardrobe {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                        self.state.view = .overview
+                    }
+                } else {
+                    self.expand(to: .wardrobe)
                 }
-            } else {
-                self.expand(to: .wardrobe)
             }
         }
 
         // .botDizzy — posted by BotEngine.slap() on 3rd hit; show confused view + recover after 3.3s
         NotificationCenter.default.addObserver(forName: .botDizzy, object: nil, queue: .main) { [weak self] _ in
-            self?.handleDizzy()
+            MainActor.assumeIsolated { self?.handleDizzy() }
         }
 
         // Eye tracking at the mouse's own rate: Mochi's look target follows every mouse move
@@ -1055,7 +1094,7 @@ final class IslandWindowController: NSWindowController {
             guard let self else { return }
             if let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
                app.bundleIdentifier != ourBundle {
-                self.state.lastExternalApp = app
+                MainActor.assumeIsolated { self.state.lastExternalApp = app }
             }
         }
     }
@@ -1268,6 +1307,7 @@ final class IslandWindowController: NSWindowController {
 
     func baseMode() -> IslandMode {
         guard state.isPresent else { return .hidden }
+        if PomodoroManager.shared.isActive { return .compact }
         return state.tasks.isEmpty ? .hidden : .compact
     }
 
@@ -2021,6 +2061,7 @@ extension Notification.Name {
     static let openFullSettings    = Notification.Name("notchBuddy.openFullSettings")
     static let hookReveal       = Notification.Name("notchBuddy.hookReveal")
     static let musicReveal      = Notification.Name("notchBuddy.musicReveal")
+    static let pomodoroStateChanged = Notification.Name("notchBuddy.pomodoroStateChanged")
     // Greeting ↔ IslandWindowController
     static let greetComplete    = Notification.Name("notchBuddy.greetComplete")
     static let checkMondayRecap = Notification.Name("notchBuddy.checkMondayRecap")
@@ -2036,7 +2077,8 @@ extension Notification.Name {
 func islandSize(mode: IslandMode, view: IslandView,
                 progress: Double = 0,
                 nw: CGFloat = IslandConst.notchWidth,
-                nh: CGFloat = IslandConst.notchHeight) -> (CGFloat, CGFloat) {
+                nh: CGFloat = IslandConst.notchHeight,
+                showingIntegrationDetail: Bool? = nil) -> (CGFloat, CGFloat) {
     switch mode {
     case .hidden:   return (nw, nh)
     case .compact:  return (nw + 160, nh)
@@ -2044,6 +2086,10 @@ func islandSize(mode: IslandMode, view: IslandView,
         let layout = IslandConst.viewLayouts[view]!
         if view == .question, let h = QuestionLayout.height {
             return (IslandConst.expandedWidth, h)
+        }
+        let isIntegrationDetail = showingIntegrationDetail ?? (Thread.isMainThread ? MainActor.assumeIsolated { AppState.shared.showingIntegrationDetail } : false)
+        if view == .overview && isIntegrationDetail {
+            return (IslandConst.expandedWidth, 260)
         }
         return (IslandConst.expandedWidth, layout.height)
     }

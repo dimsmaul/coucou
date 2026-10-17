@@ -1,6 +1,6 @@
 import Foundation
 
-enum Outfit: String, CaseIterable {
+enum Outfit: String, CaseIterable, Codable, Sendable {
     case auto, none, partyHat, beanie, crown, sunglasses, roundGlasses,
          bow, scarf, witchHat, pumpkin, santaHat, bunnyEars
 

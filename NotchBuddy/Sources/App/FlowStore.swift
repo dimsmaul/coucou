@@ -141,6 +141,8 @@ final class FlowStore: ObservableObject {
         FlowAppStyle(bundleID: "com.googlecode.iterm2", name: "iTerm", style: .verbatim),
         FlowAppStyle(bundleID: "com.microsoft.VSCode", name: "Visual Studio Code", style: .verbatim),
         FlowAppStyle(bundleID: "com.todesktop.230313mzl4w4u92", name: "Cursor", style: .verbatim),
+        FlowAppStyle(bundleID: "com.vscodium", name: "VSCodium", style: .verbatim),
+        FlowAppStyle(bundleID: "com.vscodium.codium", name: "VSCodium", style: .verbatim),
     ]
 
     // MARK: - Dictation

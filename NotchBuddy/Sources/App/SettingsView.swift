@@ -5,6 +5,9 @@ import AppKit
 struct SettingsView: View {
     @ObservedObject private var state = AppState.shared
     @ObservedObject private var demoEngine = DemoEngine.shared
+    #if !APPSTORE
+    @ObservedObject private var pouch = Pouch.shared
+    #endif
     @State private var apiKey: String = KeychainStore.shared.get("anthropic-api-key") ?? ""
 
     // Claude model — dynamic list fetched from the API, static fallback if unavailable
@@ -91,6 +94,11 @@ struct SettingsView: View {
     @State private var deepseekKey: String = KeychainStore.shared.get("deepseek-api-key") ?? ""
     @State private var qwenKey: String     = KeychainStore.shared.get("qwen-api-key") ?? ""
     @State private var moonshotKey: String = KeychainStore.shared.get("moonshot-api-key") ?? ""
+    @State private var openrouterKey: String = KeychainStore.shared.get("openrouter-api-key") ?? ""
+    @State private var antigravityKey: String = KeychainStore.shared.get("antigravity-api-key") ?? ""
+    @State private var zedToken: String = KeychainStore.shared.get("zed-token") ?? ""
+    @State private var isLoggingInGoogle: Bool = false
+    @State private var googleLoginStatus: String = ""
     @State private var ollamaURL:    String = AppState.shared.ollamaServerURL
     @State private var lmstudioURL:  String = AppState.shared.lmstudioServerURL
     @State private var connectingOllama:    Bool = false
@@ -106,6 +114,7 @@ struct SettingsView: View {
     @State private var stripeKey: String    = KeychainStore.shared.get("stripe-api-key")  ?? ""
     @State private var calcomKey: String    = KeychainStore.shared.get("calcom-api-key")  ?? ""
     @State private var notionKey: String    = KeychainStore.shared.get("notion-api-key")  ?? ""
+    @State private var huggingFaceKey: String = KeychainStore.shared.get("huggingface-api-key") ?? ""
     @AppStorage(CryptoSettings.exchangeKey)     private var cryptoExchange = CryptoExchange.coinbase.rawValue
     @AppStorage(CryptoSettings.currencyKey)     private var cryptoCurrency = "EUR"
     @AppStorage(CryptoSettings.coinsKey)        private var cryptoCoins = CryptoSettings.defaultCoins
@@ -342,6 +351,10 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 10) {
                 Toggle("Open on hover", isOn: $state.openOnHover)
                     .help("Hovering the island opens it; it folds again shortly after the pointer leaves. Click inside to keep it open.")
+                #if !APPSTORE
+                Toggle("Drops go to the pouch", isOn: $pouch.isEnabled)
+                    .help("Files dropped on the notch wait in the pouch until you drag them out. Nothing is copied or moved.")
+                #endif
                 HStack(spacing: 8) {
                     Text("Close after")
                     TextField("60", value: $state.autoCloseInterval, format: .number)
@@ -1022,6 +1035,31 @@ struct SettingsView: View {
             }
             .padding(6)
         }
+
+        GroupBox("VSCodium") {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(VSCodiumBridge.isInstalled ? Color.green : Color.orange)
+                        .frame(width: 8, height: 8)
+                    Text(VSCodiumBridge.isInstalled ? "VSCodium detected" : "VSCodium not detected (/Applications/VSCodium.app)")
+                        .font(.system(size: 11))
+                        .foregroundColor(VSCodiumBridge.isInstalled ? .primary : .secondary)
+                    Spacer()
+                    if VSCodiumBridge.isInstalled {
+                        Button("Launch VSCodium") {
+                            VSCodiumBridge.open()
+                        }
+                        .font(.system(size: 11))
+                    }
+                }
+                Text("VSCodium sessions use Claude Code hooks. When you run Claude Code inside VSCodium's terminal, events and permissions automatically route to your VSCodium pill.")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(6)
+        }
         #endif
     }
 
@@ -1138,6 +1176,148 @@ struct SettingsView: View {
                 Button(String(localized: "Save")) {
                     KeychainStore.shared.set("moonshot-api-key", value: moonshotKey)
                     statusMessage = "Moonshot key saved."
+                }
+                .buttonStyle(.borderedProminent)
+
+                Divider()
+
+                HStack(spacing: 8) {
+                    Circle().fill(Color(hex: ChatProvider.openrouter.accentHex)).frame(width: 8, height: 8)
+                    Text("OpenRouter").font(.system(size: 12, weight: .semibold))
+                }
+                SecureField("API key", text: $openrouterKey)
+                    .textFieldStyle(.roundedBorder)
+                Button(String(localized: "Save")) {
+                    KeychainStore.shared.set("openrouter-api-key", value: openrouterKey)
+                    statusMessage = "OpenRouter key saved."
+                }
+                .buttonStyle(.borderedProminent)
+
+                Divider()
+
+                // Antigravity / Gemini CLI Bridge
+                HStack(spacing: 8) {
+                    Circle().fill(Color(hex: ChatProvider.antigravity.accentHex)).frame(width: 8, height: 8)
+                    Text("Antigravity / Gemini Bridge").font(.system(size: 12, weight: .semibold))
+                    Spacer()
+                    if let account = AntigravityBridge.connectedGoogleAccount() {
+                        Text("Active (\(account))")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(.green)
+                    } else if AntigravityBridge.resolvedApiKey() != nil {
+                        Text("Active (API Key)")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(.green)
+                    } else if AntigravityBridge.resolveBinaryPath() != nil {
+                        Text("CLI Detected (Login Needed)")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(.orange)
+                    } else {
+                        Text("Not configured")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(.secondary)
+                    }
+                }
+                if let path = AntigravityBridge.resolveBinaryPath() {
+                    Text("CLI: \(path)")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                }
+
+                // Google / Gmail OAuth Login Button
+                HStack(spacing: 8) {
+                    Button {
+                        isLoggingInGoogle = true
+                        googleLoginStatus = "Launching Google sign-in…"
+                        AntigravityBridge.loginWithGoogle { status in
+                            googleLoginStatus = status
+                        } completion: { result in
+                            isLoggingInGoogle = false
+                            switch result {
+                            case .success(let email):
+                                googleLoginStatus = "Connected as \(email)!"
+                                statusMessage = "Google account connected."
+                            case .failure(let err):
+                                googleLoginStatus = "Login error: \(err.localizedDescription)"
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            if isLoggingInGoogle {
+                                ProgressView().controlSize(.small)
+                            } else {
+                                Image(systemName: "person.crop.circle.badge.checkmark")
+                            }
+                            Text(AntigravityBridge.connectedGoogleAccount() != nil ? "Re-login Gmail" : "Login with Gmail / Google")
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Color(hex: "#4285F4"))
+                    .disabled(isLoggingInGoogle)
+
+                    Button("Open in Terminal") {
+                        AntigravityBridge.openLoginInTerminal()
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                if !googleLoginStatus.isEmpty {
+                    Text(googleLoginStatus)
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                }
+
+                HStack {
+                    Text("Gemini API Key (Google AI Studio - Free):")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(.primary)
+                    Spacer()
+                    Button {
+                        if let url = URL(string: "https://aistudio.google.com/apikey") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    } label: {
+                        HStack(spacing: 3) {
+                            Text("Get Free Key")
+                            Image(systemName: "arrow.up.right.square")
+                        }
+                        .font(.system(size: 10))
+                    }
+                    .buttonStyle(.link)
+                }
+                .padding(.top, 4)
+
+                HStack {
+                    SecureField("Paste AIzaSy…", text: $antigravityKey)
+                        .textFieldStyle(.roundedBorder)
+                    Button(String(localized: "Save")) {
+                        KeychainStore.shared.set("antigravity-api-key", value: antigravityKey)
+                        statusMessage = "Gemini API key saved."
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+
+                Divider()
+
+                // Zed Subscription Bridge
+                HStack(spacing: 8) {
+                    Circle().fill(Color(hex: ChatProvider.zed.accentHex)).frame(width: 8, height: 8)
+                    Text("Zed Subscription Bridge").font(.system(size: 12, weight: .semibold))
+                    Spacer()
+                    if ZedBridge.isZedDetected() {
+                        Text("Zed detected")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(.green)
+                    }
+                }
+                Text("Reads favorite models from ~/.config/zed/settings.json")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+                SecureField("Zed Token (optional if in Keychain)", text: $zedToken)
+                    .textFieldStyle(.roundedBorder)
+                Button(String(localized: "Save")) {
+                    KeychainStore.shared.set("zed-token", value: zedToken)
+                    statusMessage = "Zed token saved."
                 }
                 .buttonStyle(.borderedProminent)
             }
@@ -1282,9 +1462,10 @@ struct SettingsView: View {
                         Circle().fill(Color(hex: "#F4505E")).frame(width: 8, height: 8)
                         Text("GitHub").font(.system(size: 12, weight: .semibold))
                     }
-                    SecureField("Personal Access Token", text: $githubToken)
+                    GitHubAccountSettingsView(githubToken: $githubToken)
+                    SecureField("Manual Personal Access Token (Optional override)", text: $githubToken)
                         .textFieldStyle(.roundedBorder)
-                    Text(String(localized: "integrations.github.token-hint"))
+                    Text("Personal Access Token is optional when GitHub CLI (gh) is authorized.")
                         .font(.system(size: 10))
                         .foregroundColor(Color(hex: "#8E939C"))
                 }
@@ -1316,6 +1497,22 @@ struct SettingsView: View {
                         Text("Notion").font(.system(size: 12, weight: .semibold))
                     }
                     SecureField("Integration token  (secret_…)", text: $notionKey)
+                        .textFieldStyle(.roundedBorder)
+                }
+
+                // Hugging Face
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(spacing: 6) {
+                        Circle().fill(Color(hex: "#FFD21E")).frame(width: 8, height: 8)
+                        Text("Hugging Face").font(.system(size: 12, weight: .semibold))
+                        Spacer()
+                        if HuggingFacePoller.isUsingLocalToken {
+                            Text("Auto-detected (~/.cache/huggingface/token)")
+                                .font(.system(size: 10))
+                                .foregroundColor(Color(hex: "#22C55E"))
+                        }
+                    }
+                    SecureField("User Access Token  (hf_…)", text: $huggingFaceKey)
                         .textFieldStyle(.roundedBorder)
                 }
 
@@ -2083,6 +2280,12 @@ struct SettingsView: View {
         saveKey("stripe-api-key",  value: stripeKey)
         saveKey("calcom-api-key",  value: calcomKey)
         saveKey("notion-api-key",  value: notionKey)
+        let prevHFToken = KeychainStore.shared.get("huggingface-api-key")
+        saveKey("huggingface-api-key", value: huggingFaceKey)
+        let nextHFToken = KeychainStore.shared.get("huggingface-api-key")
+        if nextHFToken != prevHFToken {
+            HuggingFacePoller.shared.pollNow()
+        }
         statusMessage = String(localized: "status.integrations-saved")
     }
 
@@ -2146,7 +2349,9 @@ struct SettingsView: View {
         URLSession.shared.dataTask(with: req) { data, response, _ in
             let code = (response as? HTTPURLResponse)?.statusCode ?? 0
             guard let data, code == 200 else {
-                self.fetchN8nWorkflows(urls: urls, apiKey: apiKey, idx: idx + 1)
+                DispatchQueue.main.async {
+                    self.fetchN8nWorkflows(urls: urls, apiKey: apiKey, idx: idx + 1)
+                }
                 return
             }
             let items: [[String: Any]]
@@ -2179,6 +2384,7 @@ struct SettingsView: View {
             if def.id == "agent_muse"          && !HookServer.museHooksInstalled()       { return String(localized: "Hooks not installed") }
             if def.id == "agent_opencode"      && !HookServer.openCodePluginInstalled()  { return String(localized: "Plugin not installed") }
             if def.id == "agent_amp"           && !HookServer.ampPluginInstalled()       { return String(localized: "Plugin not installed") }
+            if def.id == "agent_vscodium"      && !VSCodiumBridge.isInstalled            { return String(localized: "Not installed") }
             if def.id == SpotifyController.pillId && !SpotifyController.shared.isInstalled { return String(localized: "Not installed") }
             #endif
             if def.category == .ai {
@@ -2430,6 +2636,64 @@ struct ShortcutRecorderButton: View {
             34:"I", 37:"L", 38:"J", 40:"K", 45:"N", 46:"M", 49:"Space", 50:"`", 27:"-"
         ]
         return map[c] ?? "·"
+    }
+}
+
+// MARK: - GitHub CLI Account Settings Box
+
+struct GitHubAccountSettingsView: View {
+    @ObservedObject private var manager = GitHubAccountManager.shared
+    @Binding var githubToken: String
+
+    var body: some View {
+        if !manager.accounts.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Text("CLI Account (gh):")
+                        .font(.system(size: 11))
+                        .foregroundColor(Color(hex: "#8E939C"))
+
+                    Picker("", selection: Binding(
+                        get: { manager.activeAccount?.username ?? "" },
+                        set: { newUsername in
+                            Task {
+                                await manager.switchAccount(to: newUsername)
+                            }
+                        }
+                    )) {
+                        ForEach(manager.accounts) { acc in
+                            Text("@\(acc.username)" + (acc.isActive ? " (Active)" : ""))
+                                .tag(acc.username)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .frame(maxWidth: 190)
+
+                    if manager.isSwitching {
+                        ProgressView()
+                            .scaleEffect(0.5)
+                            .frame(width: 12, height: 12)
+                    }
+
+                    Spacer()
+                }
+                .padding(.vertical, 5)
+                .padding(.horizontal, 8)
+                .background(Color.white.opacity(0.04))
+                .cornerRadius(6)
+
+                HStack(spacing: 4) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 9))
+                        .foregroundColor(Color(hex: "#22C55E"))
+                    Text(manager.activeAccount != nil
+                         ? "Auto-synced with @\(manager.activeAccount!.username). Switching in gh or Coucou automatically updates PRs & CI."
+                         : "Auto-synced with active GitHub CLI account.")
+                        .font(.system(size: 10))
+                        .foregroundColor(Color(hex: "#8E939C"))
+                }
+            }
+        }
     }
 }
 

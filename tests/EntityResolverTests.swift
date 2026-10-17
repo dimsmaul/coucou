@@ -22,6 +22,7 @@ enum EntityResolverTests {
         check("Apple Music exact", resolve("Apple Music"),  "integration_music")
         check("Spotify exact",     resolve("Spotify"),      "integration_spotify")
         check("VS Code exact",     resolve("VS Code"),      "integration_claude")
+        check("VSCodium exact",    resolve("VSCodium"),     "agent_vscodium")
         check("OpenAI exact",      resolve("OpenAI"),       "ai_openai")
         check("LM Studio exact",   resolve("LM Studio"),    "ai_lmstudio")
         check("Google AI exact",   resolve("Google AI"),    "ai_google")
@@ -36,6 +37,8 @@ enum EntityResolverTests {
         check("musique alias",     resolve("musique"),      "integration_music")
         check("muse alias",        resolve("muse"),         "agent_muse")
         check("amp alias",         resolve("amp"),          "agent_amp")
+        check("codium alias",      resolve("codium"),       "agent_vscodium")
+        check("vs codium alias",   resolve("vs codium"),    "agent_vscodium")
 
         // ── Case/diacritic insensitive ────────────────────────────────────────
         check("GITHUB caps",       resolve("GITHUB"),       "integration_github")
@@ -62,6 +65,7 @@ enum EntityResolverTests {
 
         // ── Category filter ───────────────────────────────────────────────────
         check("Cursor workspace",      resolve("Cursor",    cat: .workspace), "agent_cursor")
+        check("VSCodium workspace",    resolve("VSCodium",  cat: .workspace), "agent_vscodium")
         check("VS Code workspace",     resolve("VS Code",   cat: .workspace), "integration_claude")
         check("claude workspace",      resolve("claude",    cat: .workspace), "integration_claude")
         checkNil("GitHub not workspace", resolve("GitHub",  cat: .workspace))

@@ -43,6 +43,13 @@ final class GithubPoller: @unchecked Sendable {
 
     // MARK: - Stats (unchanged logic)
 
+    /// Triggers immediate fetch of stats (stars + repos). Safe to call from any thread.
+    func refreshStats() {
+        DispatchQueue.global(qos: .background).async { [weak self] in
+            self?.pollStats()
+        }
+    }
+
     private func pollStats() {
         guard !DemoEngine.isPollerPaused else { return }
         guard let token = KeychainStore.shared.get("github-token") else { return }

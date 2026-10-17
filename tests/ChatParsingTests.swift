@@ -36,6 +36,27 @@ enum ChatParsingTests {
         check("no-op clean URL",       LocalChat.normaliseURL("http://localhost:11434"),       "http://localhost:11434")
         check("trims whitespace",      LocalChat.normaliseURL("  http://localhost:11434  "),   "http://localhost:11434")
 
+        print("LocalChat.chatCompletionsEndpoint")
+        check("ollama host",           LocalChat.chatCompletionsEndpoint(baseURL: "http://localhost:11434"), "http://localhost:11434/v1/chat/completions")
+        check("lmstudio host",         LocalChat.chatCompletionsEndpoint(baseURL: "http://localhost:1234"),  "http://localhost:1234/v1/chat/completions")
+        check("openrouter with /v1",   LocalChat.chatCompletionsEndpoint(baseURL: "https://openrouter.ai/api/v1"), "https://openrouter.ai/api/v1/chat/completions")
+        check("openai with /v1",       LocalChat.chatCompletionsEndpoint(baseURL: "https://api.openai.com/v1"), "https://api.openai.com/v1/chat/completions")
+        check("gemini with /openai",   LocalChat.chatCompletionsEndpoint(baseURL: "https://generativelanguage.googleapis.com/v1beta/openai"), "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions")
+        check("already completions",   LocalChat.chatCompletionsEndpoint(baseURL: "https://llm.zed.dev/chat/completions"), "https://llm.zed.dev/chat/completions")
+
+        print("LocalChat.modelsEndpoint")
+        check("bare host",             LocalChat.modelsEndpoint(baseURL: "http://localhost:11434"), "http://localhost:11434/v1/models")
+        check("openrouter with /v1",   LocalChat.modelsEndpoint(baseURL: "https://openrouter.ai/api/v1"), "https://openrouter.ai/api/v1/models")
+        check("already models",        LocalChat.modelsEndpoint(baseURL: "https://openrouter.ai/api/v1/models"), "https://openrouter.ai/api/v1/models")
+
+        print("LocalChatError.localizedDescription")
+        let genericErr: Error = LocalChatError.serverError("Invalid API key")
+        check("serverError uses real message", genericErr.localizedDescription, "Invalid API key")
+        let modelErr: Error = LocalChatError.modelNotFound("gpt-5")
+        check("modelNotFound uses real message", modelErr.localizedDescription, "Model 'gpt-5' is not installed.")
+        let reachErr: Error = LocalChatError.serverUnreachable("http://127.0.0.1:11434")
+        check("serverUnreachable uses real message", reachErr.localizedDescription, "Cannot reach http://127.0.0.1:11434. Is the server running?")
+
         print("LocalChat.parseSSEDelta")
         let sseData = #"data: {"id":"1","choices":[{"delta":{"content":"hello"}}]}"#
         check("parses delta",          LocalChat.parseSSEDelta(sseData) ?? "", "hello")

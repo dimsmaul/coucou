@@ -1,6 +1,7 @@
 # Build artefacts
 NotchBuddy/build/
 NotchBuddy/NotchBuddy.xcodeproj/project.xcworkspace/xcuserdata/
+NotchBuddy/NotchBuddy.xcodeproj/project.xcworkspace/xcshareddata/
 NotchBuddy/NotchBuddy.xcodeproj/xcuserdata/
 NotchBuddy/NotchBuddy.xcodeproj/xcshareddata/
 *.xcuserstate

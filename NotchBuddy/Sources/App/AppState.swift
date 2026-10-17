@@ -101,8 +101,20 @@ final class AppState: ObservableObject {
     // Per-day seasonal cache — read on every Mochi frame: valid until the next midnight,
     // so a frame costs one date comparison instead of calendar math.
     private var _seasonalCache: (validUntil: Date, outfit: Outfit)?
+    var activePersonaColor: String? {
+        let p = PersonaStore.shared.activePersona
+        if p.id == MochiPersona.standard.id && p.bodyColorHex.caseInsensitiveCompare("#EDEDEF") == .orderedSame {
+            return nil
+        }
+        return p.bodyColorHex
+    }
+
     var resolvedOutfit: Outfit {
         if let preview = wardrobePreviewOutfit { return preview }
+        let p = PersonaStore.shared.activePersona
+        if p.id != MochiPersona.standard.id && p.outfit != .auto {
+            return p.outfit
+        }
         guard mochiOutfitSelection == .auto else { return mochiOutfitSelection }
         let now = Date()
         if let c = _seasonalCache, now < c.validUntil { return c.outfit }
@@ -144,6 +156,15 @@ final class AppState: ObservableObject {
     }
     @Published var moonshotChatModel: String = ChatProvider.moonshot.defaultModel {
         didSet { UserDefaults.standard.set(moonshotChatModel, forKey: "moonshotChatModel") }
+    }
+    @Published var openrouterChatModel: String = ChatProvider.openrouter.defaultModel {
+        didSet { UserDefaults.standard.set(openrouterChatModel, forKey: "openrouterChatModel") }
+    }
+    @Published var antigravityChatModel: String = ChatProvider.antigravity.defaultModel {
+        didSet { UserDefaults.standard.set(antigravityChatModel, forKey: "antigravityChatModel") }
+    }
+    @Published var zedChatModel: String = ChatProvider.zed.defaultModel {
+        didSet { UserDefaults.standard.set(zedChatModel, forKey: "zedChatModel") }
     }
     @Published var ollamaServerURL: String = "" {
         didSet { UserDefaults.standard.set(ollamaServerURL, forKey: "ollamaServerURL") }
@@ -201,6 +222,24 @@ final class AppState: ObservableObject {
             }
             return
         }
+        // Bridged providers: Antigravity and Zed
+        if provider == .antigravity {
+            let models = AntigravityBridge.availableModels()
+            fetchedProviderModels[.antigravity] = models
+            if !models.contains(where: { $0.id == antigravityChatModel }) {
+                antigravityChatModel = models.first!.id
+            }
+            return
+        }
+        if provider == .zed {
+            let models = ZedBridge.availableModels()
+            fetchedProviderModels[.zed] = models
+            if !models.contains(where: { $0.id == zedChatModel }) {
+                zedChatModel = models.first!.id
+            }
+            return
+        }
+
         // Remote providers: require API key
         guard let apiKey = KeychainStore.shared.get(provider.keychainKey), !apiKey.isEmpty else {
             providerModelFetchError[provider] = "No API key — add it in Settings."
@@ -217,7 +256,8 @@ final class AppState: ObservableObject {
             case .deepseek:  models = await ClaudeService.fetchOpenAICompatibleModels(baseURL: "https://api.deepseek.com/v1", apiKey: apiKey)
             case .qwen:      models = await ClaudeService.fetchOpenAICompatibleModels(baseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1", apiKey: apiKey)
             case .moonshot:  models = await ClaudeService.fetchOpenAICompatibleModels(baseURL: "https://api.moonshot.cn/v1", apiKey: apiKey)
-            case .ollama, .lmstudio: models = []  // handled above
+            case .openrouter: models = await ClaudeService.fetchOpenAICompatibleModels(baseURL: "https://openrouter.ai/api/v1", apiKey: apiKey)
+            case .ollama, .lmstudio, .antigravity, .zed: models = []  // handled above
             }
             loadingProviderModels.remove(provider)
             if models.isEmpty {
@@ -249,6 +289,18 @@ final class AppState: ObservableObject {
                     if !models.contains(where: { $0.id == moonshotChatModel }) {
                         moonshotChatModel = models.first!.id
                     }
+                case .openrouter:
+                    if !models.contains(where: { $0.id == openrouterChatModel }) {
+                        openrouterChatModel = models.first!.id
+                    }
+                case .antigravity:
+                    if !models.contains(where: { $0.id == antigravityChatModel }) {
+                        antigravityChatModel = models.first!.id
+                    }
+                case .zed:
+                    if !models.contains(where: { $0.id == zedChatModel }) {
+                        zedChatModel = models.first!.id
+                    }
                 case .ollama, .lmstudio: break
                 }
             }
@@ -266,6 +318,9 @@ final class AppState: ObservableObject {
         case .deepseek:  return deepseekChatModel
         case .qwen:      return qwenChatModel
         case .moonshot:  return moonshotChatModel
+        case .openrouter: return openrouterChatModel
+        case .antigravity: return antigravityChatModel
+        case .zed:         return zedChatModel
         }
     }
 
@@ -396,6 +451,14 @@ final class AppState: ObservableObject {
     @Published var notionLoaded: Bool = false
     @Published var notionError: String? = nil
 
+    // Hugging Face (populated by HuggingFacePoller)
+    @Published var huggingFaceUser: HuggingFaceUser? = nil
+    @Published var huggingFaceModels: [HuggingFaceModel] = []
+    @Published var huggingFaceDatasets: [HuggingFaceDataset] = []
+    @Published var huggingFaceSpaces: [HuggingFaceSpace] = []
+    @Published var huggingFaceLoaded: Bool = false
+    @Published var huggingFaceError: String? = nil
+
     // n8n — the last executions, newest first (for the iPhone; the notch shows only the latest)
     @Published var n8nRuns: [N8nRun] = []
 
@@ -485,6 +548,8 @@ final class AppState: ObservableObject {
     @Published var planRelayInstalled: Bool = false
     // Transient — reset when island closes or view changes
     @Published var showingPlanDetail: Bool = false
+    /// True when an integration card (such as GitHub PR detail) is expanded into detail view.
+    @Published var showingIntegrationDetail: Bool = false
 
     // Codex plan gauge (from `codex app-server`) — fetched when the pill shows
     @Published var showCodexPlanInNotch: Bool = false {
@@ -534,6 +599,9 @@ final class AppState: ObservableObject {
         if let v = ud.string(forKey: "deepseekChatModel"), !v.isEmpty { deepseekChatModel = v }
         if let v = ud.string(forKey: "qwenChatModel"),     !v.isEmpty { qwenChatModel     = v }
         if let v = ud.string(forKey: "moonshotChatModel"), !v.isEmpty { moonshotChatModel = v }
+        if let v = ud.string(forKey: "openrouterChatModel"), !v.isEmpty { openrouterChatModel = v }
+        if let v = ud.string(forKey: "antigravityChatModel"), !v.isEmpty { antigravityChatModel = v }
+        if let v = ud.string(forKey: "zedChatModel"), !v.isEmpty { zedChatModel = v }
         if let v = ud.string(forKey: "ollamaServerURL"), !v.isEmpty { ollamaServerURL = v }
         if let v = ud.string(forKey: "lmstudioServerURL"), !v.isEmpty { lmstudioServerURL = v }
         // Migrate old 60s default → 15s
@@ -654,10 +722,12 @@ final class AppState: ObservableObject {
     }
 
     func syncMode() {
-        // If no tasks and not expanded/peek, go hidden
+        // If no tasks and not expanded/peek, go hidden (unless Pomodoro timer is active)
         if tasks.isEmpty && mode == .compact {
-            mode = .hidden
-        } else if !tasks.isEmpty && mode == .hidden && isPresent {
+            if !PomodoroManager.shared.isActive {
+                mode = .hidden
+            }
+        } else if (!tasks.isEmpty || PomodoroManager.shared.isActive) && mode == .hidden && isPresent {
             mode = .compact
         }
     }

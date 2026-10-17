@@ -20,17 +20,32 @@ final class FileDropNSView: NSView {
     // Pass all mouse events through — drag-drop uses NSDraggingDestination, not hitTest
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
+    /// Files dragged out of the pouch pass over the notch first: not a new drop.
+    private func isPouchDrag(_ sender: NSDraggingInfo?) -> Bool {
+        #if !APPSTORE
+        return sender?.draggingSource is PouchDragSourceView
+        #else
+        return false
+        #endif
+    }
+
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard !isPouchDrag(sender) else { return [] }
         onDragEntered?(sender.draggingLocation)
         return .copy
     }
     override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard !isPouchDrag(sender) else { return [] }
         onDragUpdated?(sender.draggingLocation)
         return .copy
     }
-    override func draggingExited(_ sender: NSDraggingInfo?) { onDragExited?() }
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        guard !isPouchDrag(sender) else { return }
+        onDragExited?()
+    }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard !isPouchDrag(sender) else { return false }
         guard let urls = sender.draggingPasteboard.readObjects(
             forClasses: [NSURL.self],
             options: [.urlReadingFileURLsOnly: true]

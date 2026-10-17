@@ -23,6 +23,7 @@ struct IslandRootView: View {
 struct IslandContainer: View {
     @ObservedObject var state: AppState
     @ObservedObject private var demoEngine = DemoEngine.shared
+    @ObservedObject private var pomodoro = PomodoroManager.shared
     @State private var islandWidth:  CGFloat = IslandConst.notchWidth
     @State private var islandHeight: CGFloat = IslandConst.notchHeight
     @State private var cornerRadius: CGFloat = IslandConst.roundedCorner
@@ -125,10 +126,23 @@ struct IslandContainer: View {
 
             Group {
                 if state.mode == .compact {
-                    CompactMiniGrid(state: state)
-                        .scaleEffect(IslandRestingLayout(width: islandWidth, height: islandHeight).miniGridScale)
-                        .position(x: islandWidth - 40, y: islandHeight / 2)
+                    if pomodoro.isActive {
+                        CompactPomodoroBadge()
+                            .scaleEffect(IslandRestingLayout(width: islandWidth, height: islandHeight).miniGridScale)
+                            .position(x: islandWidth - 40, y: islandHeight / 2)
+                            .transition(.opacity)
+                    } else {
+                        CompactMiniGrid(state: state)
+                            .scaleEffect(IslandRestingLayout(width: islandWidth, height: islandHeight).miniGridScale)
+                            .position(x: islandWidth - 40, y: islandHeight / 2)
+                            .transition(.opacity)
+                    }
+                    #if !APPSTORE
+                    // Between the notch and the mini grid; empty unless the pouch holds files.
+                    PouchBadge()
+                        .position(x: islandWidth - 67, y: islandHeight / 2)
                         .transition(.opacity)
+                    #endif
                 }
             }
             .animation(.easeInOut(duration: 0.25), value: state.mode == .compact)
@@ -167,6 +181,14 @@ struct IslandContainer: View {
         .onChange(of: state.chatHistory.count) { _, _ in
             guard state.mode == .expanded, state.view == .prompt else { return }
             withAnimation(openSpring) { islandHeight = chatPromptHeight }
+        }
+        .onChange(of: state.showingIntegrationDetail) { _, isDetail in
+            guard state.mode == .expanded, state.view == .overview else { return }
+            let (_, h) = islandSize(mode: .expanded, view: .overview,
+                                    progress: state.uploadProgress,
+                                    nw: state.notchWidth, nh: state.notchHeight,
+                                    showingIntegrationDetail: isDetail)
+            withAnimation(openSpring) { islandHeight = h }
         }
         .onAppear {
             let (w, h) = islandSize(mode: state.mode, view: state.view,
@@ -392,6 +414,9 @@ func botPosition(mode: IslandMode, view: IslandView, islandW: CGFloat, islandH: 
         let cy: CGFloat
         if let fixedY = layout.botY {
             cy = fixedY
+        } else if view == .overview && islandH > 160 {
+            // When expanded for integration details (e.g. PR list), keep bot aligned with card header
+            cy = 101
         } else {
             // Center of the fixed 84pt card (VStack top=8, header=34 → content starts at y=42)
             let headerBottom: CGFloat = 42
@@ -493,9 +518,9 @@ struct IslandContentView: View {
                 ForEach(IslandView.allCases, id: \.self) { v in
                     let active = state.view == v
                     // Views that fill available height instead of the fixed 98pt content frame:
-                    // chat (prompt) is always flexible; mail is flexible only when active so
-                    // it doesn't push the ZStack taller when inactive.
-                    let isTall = v == .prompt || (v == .mail && active)
+                    // chat (prompt) is always flexible; mail and pouch are flexible only when active so
+                    // they don't push the ZStack taller when inactive; overview is flexible when integration detail is active.
+                    let isTall = v == .prompt || ((v == .mail || v == .pouch) && active) || (v == .overview && state.showingIntegrationDetail && active)
                     let anim: Animation = active
                         ? .spring(response: 0.4, dampingFraction: 0.8).delay(0.16)
                         : .easeIn(duration: 0.16)
@@ -510,6 +535,7 @@ struct IslandContentView: View {
                         .scaleEffect(active ? 1 : 0.97)
                         .allowsHitTesting(active)
                         .animation(anim, value: state.view)
+                        .animation(.spring(response: 0.35, dampingFraction: 0.82), value: state.showingIntegrationDetail)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -528,6 +554,9 @@ struct IslandHeader: View {
     @State private var gearHovered  = false
     @State private var soundHovered = false
     @State private var closeHovered = false
+    #if !APPSTORE
+    @ObservedObject private var pouch = Pouch.shared
+    #endif
 
     /// Pending approval or mail draft: the island refuses to fold (fsm.isHeldOpen), so the
     /// close cross is not shown.
@@ -546,6 +575,12 @@ struct IslandHeader: View {
                     #endif
                 })
                 TabButton(icon: "plus", view: .upload, state: state)
+                #if !APPSTORE
+                // The pouch, any time its switch is on (even empty).
+                if pouch.isEnabled {
+                    TabButton(icon: "paperclip", view: .pouch, state: state)
+                }
+                #endif
             }
             .padding(.leading, 14)
 
@@ -563,6 +598,10 @@ struct IslandHeader: View {
                 }
                 #endif
                 HStack(spacing: 14) {
+                    PomodoroHeaderButton()
+
+                    GitHubAccountHeaderDropdown()
+
                     Button(action: {
                         withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                             state.view = .settings
@@ -725,3 +764,159 @@ struct CompactMiniGrid: View {
         .frame(width: 28, height: 28)
     }
 }
+
+// MARK: - GitHub CLI Account Header Button (left of gear/settings)
+
+@MainActor
+final class GitHubMenuHelper: NSObject {
+    static let shared = GitHubMenuHelper()
+
+    @objc func switchAccountAction(_ sender: NSMenuItem) {
+        guard let repr = sender.representedObject as? String else { return }
+        let parts = repr.components(separatedBy: ":")
+        guard parts.count == 2 else { return }
+        let host = parts[0]
+        let user = parts[1]
+        Task {
+            await GitHubAccountManager.shared.switchAccount(to: user, host: host)
+        }
+    }
+
+    @objc func refreshAction() {
+        GitHubAccountManager.shared.refresh()
+    }
+}
+
+struct GitHubAccountHeaderDropdown: View {
+    @ObservedObject private var manager = GitHubAccountManager.shared
+    @State private var hovered = false
+
+    var body: some View {
+        if !manager.accounts.isEmpty {
+            Button(action: showMenu) {
+                Group {
+                    if manager.isSwitching {
+                        ProgressView()
+                            .scaleEffect(0.5)
+                            .frame(width: 14, height: 14)
+                    } else {
+                        Image("GitHubIcon")
+                            .resizable()
+                            .renderingMode(.template)
+                            .aspectRatio(contentMode: .fit)
+                            .frame(width: 14, height: 14)
+                            .foregroundColor(hovered ? Color(hex: "#F5F6F8") : Color(hex: "#8E939C"))
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .onHover { hovered = $0 }
+            .help(manager.activeAccount != nil
+                  ? "GitHub: @\(manager.activeAccount!.username) (Click to switch)"
+                  : "Switch GitHub CLI Account")
+        }
+    }
+
+    private func showMenu() {
+        let menu = NSMenu(title: "GitHub CLI Accounts")
+
+        let headerItem = NSMenuItem(title: "GitHub CLI Accounts", action: nil, keyEquivalent: "")
+        headerItem.isEnabled = false
+        menu.addItem(headerItem)
+        menu.addItem(NSMenuItem.separator())
+
+        for acc in manager.accounts {
+            let title = acc.isActive ? "✓ @\(acc.username) (Active)" : "   @\(acc.username)"
+            let item = NSMenuItem(title: title, action: #selector(GitHubMenuHelper.switchAccountAction(_:)), keyEquivalent: "")
+            item.target = GitHubMenuHelper.shared
+            item.representedObject = "\(acc.host):\(acc.username)"
+            menu.addItem(item)
+        }
+
+        menu.addItem(NSMenuItem.separator())
+        let refreshItem = NSMenuItem(title: "Refresh Accounts", action: #selector(GitHubMenuHelper.refreshAction), keyEquivalent: "")
+        refreshItem.target = GitHubMenuHelper.shared
+        menu.addItem(refreshItem)
+
+        if let event = NSApp.currentEvent, let window = event.window ?? NSApp.keyWindow {
+            let pointInWindow = event.locationInWindow
+            menu.popUp(positioning: nil, at: NSPoint(x: pointInWindow.x - 10, y: pointInWindow.y - 10), in: window.contentView)
+        } else {
+            menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+        }
+    }
+}
+
+// MARK: - Pomodoro & Time Tracker (Header Button & Compact Badge)
+
+struct PomodoroHeaderButton: View {
+    @ObservedObject private var manager = PomodoroManager.shared
+    @EnvironmentObject var state: AppState
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                state.view = state.view == .pomodoro ? .overview : .pomodoro
+            }
+        }) {
+            HStack(spacing: 4) {
+                Image(systemName: state.view == .pomodoro ? "timer" : (manager.isActive ? "timer" : "stopwatch"))
+                    .font(.system(size: 14))
+                    .foregroundColor(hovered || state.view == .pomodoro || manager.isActive ? Color(hex: "#F5F6F8") : Color(hex: "#8E939C"))
+
+                if manager.isActive {
+                    Text(manager.displayTime)
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .foregroundColor(hovered || state.view == .pomodoro || manager.isActive ? Color(hex: "#F5F6F8") : Color(hex: "#8E939C"))
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+        .help(manager.isActive
+              ? "\(manager.mode.title): \(manager.displayTime) (Click to toggle Focus view)"
+              : "Focus & Time Tracker")
+    }
+}
+
+struct CompactPomodoroBadge: View {
+    @ObservedObject private var manager = PomodoroManager.shared
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: {
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+                AppState.shared.view = .pomodoro
+                NotificationCenter.default.post(name: .islandAction, object: nil)
+            }
+        }) {
+            HStack(spacing: 4) {
+                Image(systemName: manager.mode == .tracker ? "stopwatch" : "timer")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundColor(manager.state == .paused ? Color(hex: "#8E939C") : Color(hex: "#F5F6F8"))
+
+                Text(manager.state == .completed ? "Done" : manager.displayTime)
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundColor(manager.state == .paused ? Color(hex: "#8E939C") : Color(hex: "#F5F6F8"))
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(
+                Capsule()
+                    .fill(hovered ? Color.white.opacity(0.2) : (manager.state == .paused ? Color.white.opacity(0.06) : Color.white.opacity(0.12)))
+            )
+            .overlay(
+                Capsule()
+                    .stroke(hovered ? Color.white.opacity(0.35) : Color.white.opacity(0.1), lineWidth: 0.5)
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+        .help("\(manager.mode.title): \(manager.displayTime) (Click to open Focus timer)")
+    }
+}
+
+

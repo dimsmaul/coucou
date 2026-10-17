@@ -15,6 +15,8 @@ enum IslandView: String, CaseIterable {
     case listening    // voice wake detected — "À l'écoute…" with live transcript
     case voiceResult  // voice command executed — "✓ Musique lancée" for ~2 s
     case capture      // a screen capture just taken (⌃⌥X): paste, copy, annotate, ask Claude
+    case pouch        // file shelf: files dropped on the notch, waiting to be dragged out
+    case pomodoro     // focus timer & stopwatch
 }
 
 // MARK: - Bot State
@@ -30,6 +32,12 @@ enum BotState: String, CaseIterable {
 enum BotEmote: String, CaseIterable {
     case love, surprised, proud, wink, yawn, happy, annoyed
     case listening   // attentive: head tilt + wide-open eyes
+}
+
+// MARK: - Eye Shape
+
+public enum EyeShape: String, Codable, Sendable {
+    case pill, wide, dot, line, flat, happy, closed, spiral, heart, star, tired, wink, cup
 }
 
 // MARK: - Voice sub-state
@@ -51,7 +59,7 @@ struct ApprovalInfo: Sendable {
     var command: String
     /// tool_input serialized to JSON with sortedKeys, "" if absent — used to match PostToolUse.
     var inputKey: String
-    /// Pill that owns this approval: "integration_claude", "agent_cursor", or "agent_codex".
+    /// Pill that owns this approval: "integration_claude", "agent_cursor", "agent_vscodium", or "agent_codex".
     var pillId: String
     /// Queued request this card answers (Mac): a decision is only accepted for this id.
     var id: UUID = UUID()
@@ -102,6 +110,9 @@ enum ChatProvider: String, CaseIterable, Codable {
     case deepseek  = "deepseek"
     case qwen      = "qwen"
     case moonshot  = "moonshot"
+    case openrouter = "openrouter"
+    case antigravity = "antigravity"
+    case zed        = "zed"
 
     var displayName: String {
         switch self {
@@ -113,6 +124,9 @@ enum ChatProvider: String, CaseIterable, Codable {
         case .deepseek:  "DeepSeek"
         case .qwen:      "Qwen"
         case .moonshot:  "Moonshot"
+        case .openrouter: "OpenRouter"
+        case .antigravity: "Antigravity"
+        case .zed:       "Zed AI"
         }
     }
 
@@ -126,6 +140,9 @@ enum ChatProvider: String, CaseIterable, Codable {
         case .deepseek:  "#5B8FF9"
         case .qwen:      "#FF6A00"
         case .moonshot:  "#7C5CFC"
+        case .openrouter: "#6467F2"
+        case .antigravity: "#E879F9"
+        case .zed:       "#F5AC38"
         }
     }
 
@@ -139,6 +156,9 @@ enum ChatProvider: String, CaseIterable, Codable {
         case .deepseek:  "deepseek-chat"
         case .qwen:      "qwen-max"
         case .moonshot:  "moonshot-v1-32k"
+        case .openrouter: "openrouter/auto"
+        case .antigravity: "gemini-2.5-flash"
+        case .zed:       "claude-sonnet-4-6"
         }
     }
 
@@ -152,11 +172,18 @@ enum ChatProvider: String, CaseIterable, Codable {
         case .deepseek:  "deepseek-api-key"
         case .qwen:      "qwen-api-key"
         case .moonshot:  "moonshot-api-key"
+        case .openrouter: "openrouter-api-key"
+        case .antigravity: "antigravity-api-key"
+        case .zed:       "zed-token"
         }
     }
 
     var isLocal: Bool {
         self == .ollama || self == .lmstudio
+    }
+
+    var isBridged: Bool {
+        self == .antigravity || self == .zed
     }
 
     var pillID: String {
@@ -169,6 +196,9 @@ enum ChatProvider: String, CaseIterable, Codable {
         case .deepseek:  "ai_deepseek"
         case .qwen:      "ai_qwen"
         case .moonshot:  "ai_moonshot"
+        case .openrouter: "ai_openrouter"
+        case .antigravity: "ai_antigravity"
+        case .zed:       "ai_zed"
         }
     }
 
@@ -182,6 +212,9 @@ enum ChatProvider: String, CaseIterable, Codable {
         case "ai_deepseek":  self = .deepseek
         case "ai_qwen":      self = .qwen
         case "ai_moonshot":  self = .moonshot
+        case "ai_openrouter": self = .openrouter
+        case "ai_antigravity": self = .antigravity
+        case "ai_zed":       self = .zed
         default:             return nil
         }
     }
@@ -240,6 +273,10 @@ enum IslandConst {
         .voiceResult:  ViewLayout(height: 160, botX: 68,  botY: nil, botDiameter: 58, agentMode: .none),
         // Screen capture: Mochi on the left (he just swallowed it), the image and what to do with it
         .capture:      ViewLayout(height: 160, botX: 58,  botY: nil, botDiameter: 52, agentMode: .none),
+        // Pouch: Mochi on the left, the dropped files to his right
+        .pouch:        ViewLayout(height: 240, botX: 58,  botY: 101, botDiameter: 52, agentMode: .none),
+        // Pomodoro: Focus timer and stopwatch layout inside island
+        .pomodoro:     ViewLayout(height: 160, botX: 68,  botY: nil, botDiameter: 58, agentMode: .none),
     ]
 
     // Project colors — keyed by lowercase display name or slug

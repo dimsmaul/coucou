@@ -10,7 +10,7 @@ struct QueuedApproval: Equatable, Sendable {
     /// Client socket, held open until the user decides. Closed by the owner's dispatch source.
     let fd: Int32
     let sessionId: String
-    /// "integration_claude", "agent_cursor" or "agent_codex".
+    /// "integration_claude", "agent_cursor", "agent_vscodium" or "agent_codex".
     let pillId: String
     let projectName: String
     let cwd: String

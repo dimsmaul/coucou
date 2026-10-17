@@ -22,6 +22,7 @@ enum ClaudeHostTests {
         check("Orca by bundle id", ClaudeHost.terminal(termProgram: "", bundleId: "com.stablyai.orca")?.name == "Orca")
         check("VS Code → nil", ClaudeHost.terminal(termProgram: "vscode", bundleId: "com.microsoft.VSCode") == nil)
         check("Cursor → nil", ClaudeHost.terminal(termProgram: "vscode", bundleId: "com.todesktop.230313mzl4w4u92") == nil)
+        check("VSCodium → nil", ClaudeHost.terminal(termProgram: "vscode", bundleId: "com.vscodium") == nil)
         check("unknown → nil", ClaudeHost.terminal(termProgram: "", bundleId: "com.example.app") == nil)
 
         print("ClaudeHost.name / pillName")

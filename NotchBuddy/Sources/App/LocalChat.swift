@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - Typed error for local model calls
 
-enum LocalChatError: Error {
+enum LocalChatError: LocalizedError {
     /// The server is not reachable (wrong URL, not running, network error).
     case serverUnreachable(String)
     /// The model was requested but is not installed on the server.
@@ -10,12 +10,16 @@ enum LocalChatError: Error {
     /// The server replied with an error message.
     case serverError(String)
 
-    var localizedDescription: String {
+    var errorDescription: String? {
         switch self {
         case .serverUnreachable(let url): return "Cannot reach \(url). Is the server running?"
         case .modelNotFound(let model):   return "Model '\(model)' is not installed."
         case .serverError(let msg):       return msg
         }
+    }
+
+    var localizedDescription: String {
+        errorDescription ?? "Unknown local chat error."
     }
 }
 
@@ -33,6 +37,30 @@ enum LocalChat {
             if s.hasSuffix(suffix) { s = String(s.dropLast(suffix.count)) }
         }
         return s
+    }
+
+    /// Normalises the chat completions endpoint from a base URL.
+    /// Handles URLs ending in /chat/completions, /v1, /openai, or bare domain/host:port.
+    static func chatCompletionsEndpoint(baseURL: String) -> String {
+        var base = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        while base.hasSuffix("/") { base = String(base.dropLast()) }
+        if base.hasSuffix("/chat/completions") { return base }
+        if base.hasSuffix("/v1") || base.hasSuffix("/openai") {
+            return "\(base)/chat/completions"
+        }
+        return "\(base)/v1/chat/completions"
+    }
+
+    /// Normalises the models endpoint from a base URL.
+    /// Handles URLs ending in /models, /v1, /openai, or bare domain/host:port.
+    static func modelsEndpoint(baseURL: String) -> String {
+        var base = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        while base.hasSuffix("/") { base = String(base.dropLast()) }
+        if base.hasSuffix("/models") { return base }
+        if base.hasSuffix("/v1") || base.hasSuffix("/openai") {
+            return "\(base)/models"
+        }
+        return "\(base)/v1/models"
     }
 
     // MARK: SSE parsing
@@ -78,7 +106,7 @@ enum LocalChat {
     /// Fetches models, returning `.success([])` when the server responds but has no chat models,
     /// vs `.failure(.serverUnreachable)` when the server is not reachable.
     static func fetchModelsResult(baseURL: String) async -> Result<[(id: String, label: String)], LocalChatError> {
-        guard let url = URL(string: "\(baseURL)/v1/models") else {
+        guard let url = URL(string: modelsEndpoint(baseURL: baseURL)) else {
             return .failure(.serverUnreachable(baseURL))
         }
         var req = URLRequest(url: url, timeoutInterval: 5)
@@ -144,16 +172,22 @@ enum LocalChat {
         baseURL: String,
         encodedBody: Data,
         model: String,
+        authHeader: String? = nil,
+        extraHeaders: [String: String] = [:],
         onToken: @MainActor @escaping (String) -> Void
     ) async throws -> String {
-        guard let url = URL(string: "\(baseURL)/v1/chat/completions") else {
+        let endpoint = chatCompletionsEndpoint(baseURL: baseURL)
+        guard let url = URL(string: endpoint) else {
             throw LocalChatError.serverUnreachable(baseURL)
         }
 
         var req = URLRequest(url: url, timeoutInterval: 300)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue("Bearer ollama", forHTTPHeaderField: "Authorization")
+        req.setValue(authHeader ?? "Bearer ollama", forHTTPHeaderField: "Authorization")
+        for (k, v) in extraHeaders {
+            req.setValue(v, forHTTPHeaderField: k)
+        }
         req.httpBody = encodedBody
 
         let bytes: URLSession.AsyncBytes
@@ -166,17 +200,21 @@ enum LocalChat {
 
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
 
-        if status == 404 {
-            throw LocalChatError.modelNotFound(model)
-        }
-
         if status != 200 {
             var raw = ""
             do { for try await byte in bytes { raw.append(Character(UnicodeScalar(byte))); if raw.count > 4096 { break } } } catch {}
             if let data = raw.data(using: .utf8),
-               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let msg = ((json["error"] as? [String: Any])?["message"] as? String) {
-                throw LocalChatError.serverError(msg)
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                if let errObj = json["error"] as? [String: Any], let msg = errObj["message"] as? String {
+                    throw LocalChatError.serverError(msg)
+                } else if let msg = json["error"] as? String {
+                    throw LocalChatError.serverError(msg)
+                } else if let msg = json["message"] as? String {
+                    throw LocalChatError.serverError(msg)
+                }
+            }
+            if status == 404 {
+                throw LocalChatError.modelNotFound(model)
             }
             throw LocalChatError.serverError("HTTP \(status)")
         }

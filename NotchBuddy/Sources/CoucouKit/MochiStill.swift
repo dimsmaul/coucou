@@ -10,6 +10,7 @@ struct MochiStill: View {
     /// Body color; white by default, like the mockups.
     var bodyHex: String = "#FFFFFF"
     var showBadge: Bool = true
+    var outfit: Outfit = .none
     /// Where he looks and how his eyes are, for a still that isn't always the same.
     var pose: MochiPose = .neutral
 
@@ -29,7 +30,14 @@ struct MochiStill: View {
                 engine.eyeOverride = eye
                 engine.eyeOverrideUntil = .greatestFiniteMagnitude
             }
+            if outfit != .none {
+                engine.setOutfit(outfit, animated: false)
+                engine.drawOutfitBehind(context: context, size: size)
+            }
             engine.draw(context: context, size: size)
+            if outfit != .none {
+                engine.drawOutfitFront(context: context, size: size)
+            }
             if showBadge, let badge = engine.cfg.badge {
                 engine.badge = badge
                 engine.badgeS = 1

@@ -6,18 +6,19 @@ import SwiftUI
 /// The pages of the Coucou window: Flow (the dictation, the Notetaker) and the notch's settings.
 enum HubPage: String, CaseIterable, Identifiable {
     case dictation, notes, insights, dictionary, snippets, styles, settings
-    case general, pills, agents, chat, integrations, voice, shortcuts
+    case general, pills, personas, agents, chat, integrations, voice, shortcuts
 
     var id: String { rawValue }
 
     static let flowPages: [HubPage] = [.dictation, .notes, .insights, .dictionary, .snippets, .styles, .settings]
-    static let notchPages: [HubPage] = [.general, .pills, .agents, .chat, .integrations, .voice, .shortcuts]
+    static let notchPages: [HubPage] = [.general, .pills, .personas, .agents, .chat, .integrations, .voice, .shortcuts]
 
     /// The section of Settings this page shows, for the notch's pages.
     var settingsSection: String? {
         switch self {
         case .general:      return "general"
         case .pills:        return "activepills"
+        case .personas:     return "personas"
         case .agents:       return "agents"
         case .chat:         return "chat"
         case .integrations: return "integrations"
@@ -36,6 +37,7 @@ enum HubPage: String, CaseIterable, Identifiable {
         switch self {
         case .general:      return String(localized: "General")
         case .pills:        return String(localized: "Active pills")
+        case .personas:     return String(localized: "Personas")
         case .agents:       return String(localized: "Agents")
         case .chat:         return String(localized: "Chat")
         case .integrations: return String(localized: "Integrations")
@@ -62,6 +64,7 @@ enum HubPage: String, CaseIterable, Identifiable {
         case .settings:   return "slider.horizontal.3"
         case .general:      return "gearshape"
         case .pills:        return "square.grid.2x2"
+        case .personas:     return "person.crop.circle"
         case .agents:       return "terminal"
         case .chat:         return "bubble.left.and.bubble.right"
         case .integrations: return "puzzlepiece.extension"
@@ -113,6 +116,7 @@ extension HubPage {
         switch page {
         case .general:      return String(localized: "hub.notch.general")
         case .pills:        return String(localized: "hub.notch.pills")
+        case .personas:     return String(localized: "hub.personas-promo", defaultValue: "Personalized Mochi buddies with distinct skills, outfits, MCP servers, and app integrations.")
         case .agents:       return String(localized: "hub.notch.agents")
         case .chat:         return String(localized: "hub.notch.chat")
         case .integrations: return String(localized: "hub.notch.integrations")
@@ -231,6 +235,7 @@ struct FlowHubView: View {
         case .snippets:   HubSnippetsPage()
         case .styles:     HubStylesPage(router: router)
         case .settings:   HubSettingsPage()
+        case .personas:   FlowHubPersonasView()
         default:
             if let section = router.page.settingsSection {
                 VStack(alignment: .leading, spacing: 0) {

@@ -207,6 +207,7 @@ final class IslandStateMachine {
         petitHideWork?.cancel()
         let item = DispatchWorkItem { [weak self] in
             guard let self, self.state == .petit, !(self.isHeldOpen?() ?? false) else { return }
+            if PomodoroManager.shared.isActive { return }
             self.transition(to: .hidden)
         }
         petitHideWork = item

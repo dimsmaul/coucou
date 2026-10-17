@@ -67,6 +67,9 @@ final class KeychainStore: @unchecked Sendable {
         "deepseek-api-key",
         "qwen-api-key",
         "moonshot-api-key",
+        "openrouter-api-key",
+        "antigravity-api-key",
+        "zed-token",
         "resend-api-key", "resend-from",
         "n8n-url", "n8n-api-key",
         "vercel-token",
@@ -74,6 +77,7 @@ final class KeychainStore: @unchecked Sendable {
         "stripe-api-key",
         "calcom-api-key",
         "notion-api-key",
+        "huggingface-api-key",
         "elevenlabs-api-key",
         // Portfolio exchange credentials
         "portfolio-binance-key",  "portfolio-binance-secret",
@@ -200,8 +204,11 @@ final class ClaudeService {
         }
     }
 
-    /// Chosen in Settings; falls back to the default when the field is left empty.
+    /// Chosen in Settings or active Persona; falls back to the default when the field is left empty.
     private var model: String {
+        if let override = PersonaStore.shared.activePersona.modelOverride, !override.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return override.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
         let m = AppState.shared.claudeModel.trimmingCharacters(in: .whitespacesAndNewlines)
         return m.isEmpty ? AppState.defaultClaudeModel : m
     }
@@ -215,24 +222,48 @@ final class ClaudeService {
         conversationMessages = []
     }
 
-    /// Resolved once: NSFullUserName() is a system call, and the name cannot change under us
-    /// while the app runs.
-    private let systemPrompt = ClaudeService.makeSystemPrompt()
+    /// Resolved once as default fallback
+    private let defaultSystemPrompt = ClaudeService.makeSystemPrompt()
 
-    /// Greets the user by their macOS first name when there is one worth using, and stays
-    /// neutral otherwise — same wording as the Windows build.
-    private nonisolated static func makeSystemPrompt() -> String {
+    /// Greets the user and incorporates the active persona's instructions and role.
+    static func makeSystemPrompt(persona: MochiPersona? = nil) -> String {
         let opening = if let firstName = resolveUserFirstName() {
             "You are Mochi, \(firstName)'s personal AI assistant embedded in the notch of their Mac."
         } else {
             "You are Mochi, a personal AI assistant embedded in the notch of the user's Mac."
         }
-        return """
-        \(opening) \
-        You have web search access and can help with absolutely anything — research, coding, finding places, recommendations, tasks, questions. \
-        Respond in the user's language. Be thorough and complete — use as much detail as the task requires. \
+        var prompt = opening
+        if let p = persona, !p.systemPrompt.isEmpty {
+            prompt += "\nActive Persona: \(p.name) (Role: \(p.role))\n\(p.systemPrompt)"
+            if p.connections.canDelegate {
+                let meshPrompt = MochiMeshOrchestrator.makeMeshPrompt(for: p, allPersonas: PersonaStore.shared.personas)
+                if !meshPrompt.isEmpty {
+                    prompt += "\n\n" + meshPrompt
+                }
+            }
+            if p.deviceAccess.isEnabled {
+                let stats = DeviceOrchestrator.liveSummary()
+                prompt += """
+                \n\n[FULL DEVICE ACCESS & ORCHESTRATION PROTOCOL]
+                You are the Chief Mac Orchestrator on this device.
+                Live Mac Hardware & OS Metrics:
+                \(stats)
+
+                MANDATORY FORMATTING & REPORTING RULES:
+                1. Human-Readable Markdown ONLY: NEVER respond with bare code blocks ($ top, $ ps, raw CLI dumps). Always parse, calculate, and format your findings into beautiful, executive Markdown reports using status badges (🟢 🟡 🔴 ⚡ 🧠 💻 🤖), bold metrics, and clean bullet lists.
+                2. Live Telemetry: You have real-time Mac metrics directly in your context above. When asked about CPU, RAM, disk, or battery, synthesize these numbers directly into a polished report with health assessments.
+                3. Command Execution: When you need to inspect deep processes (e.g. running Claude agent, VSCodium, background tasks), you may output `@exec(command: "...")`, but you MUST ALWAYS write a complete, friendly, structured Markdown report explaining what is happening.
+                4. Language: Match the user's language (Indonesian or English). Be sharp, calm, proactive, and dependable ("Jackfrost").
+                """
+            }
+        } else {
+            prompt += "\nYou have web search access and can help with absolutely anything — research, coding, finding places, recommendations, tasks, questions."
+        }
+        prompt += """
+        \nRespond in the user's language. Be thorough and complete — use as much detail as the task requires. \
         Use light Markdown when it helps: short paragraphs, bullet lists, **bold**, `inline code` and fenced code blocks. Avoid tables and big headings: the chat window is small.
         """
+        return prompt
     }
 
     private let webSearchTools: [[String: Any]] = [
@@ -248,8 +279,18 @@ final class ClaudeService {
             state.stateOverride = nil
             return
         }
-        guard state.chatProvider == .anthropic else {
-            await chatOpenAICompatible(query: query, context: context, state: state)
+        let activePersona = PersonaStore.shared.activePersona
+        let effectiveProvider = activePersona.providerOverride ?? state.chatProvider
+        if effectiveProvider == .antigravity {
+            await chatAntigravity(query: query, context: context, state: state)
+            return
+        }
+        if effectiveProvider == .zed {
+            await chatZed(query: query, context: context, state: state)
+            return
+        }
+        guard effectiveProvider == .anthropic else {
+            await chatOpenAICompatible(query: query, context: context, state: state, providerOverride: effectiveProvider)
             return
         }
         guard let key = apiKey, !key.isEmpty else {
@@ -278,11 +319,18 @@ final class ClaudeService {
 
         conversationMessages.append(["role": "user", "content": userContent])
 
+        var activeTools = webSearchTools
+        for tool in MCPClientManager.shared.activeTools {
+            activeTools.append(tool.toAnthropicTool())
+        }
+
+        let personaPrompt = ClaudeService.makeSystemPrompt(persona: PersonaStore.shared.activePersona)
+
         let body: [String: Any] = [
             "model": model,
             "max_tokens": 4096,
-            "tools": webSearchTools,
-            "system": systemPrompt,
+            "tools": activeTools,
+            "system": personaPrompt,
             "messages": conversationMessages,
         ]
 
@@ -295,10 +343,176 @@ final class ClaudeService {
         }
     }
 
+    // MARK: - Antigravity / Gemini Bridge Chat
+
+    func chatAntigravity(query: String, context: PromptContext?, state: AppState) async {
+        let personaPrompt = ClaudeService.makeSystemPrompt(persona: PersonaStore.shared.activePersona)
+        var msgs: [[String: Any]] = [["role": "system", "content": personaPrompt]]
+        for m in conversationMessages {
+            var simplified = m
+            if let content = m["content"] as? [[String: Any]],
+               let textBlock = content.first(where: { ($0["type"] as? String) == "text" }),
+               let text = textBlock["text"] as? String {
+                simplified["content"] = text
+            }
+            msgs.append(simplified)
+        }
+        var userText = query
+        if conversationMessages.isEmpty, let ctx = context {
+            switch ctx {
+            case .window(let app, let title, let url):
+                var prefix = "Context — App: \(app), Window: \(title)"
+                if let u = url { prefix += ", URL: \(u)" }
+                userText = prefix + "\n\n" + query
+            case .file(let name, let fileURL):
+                if let fileURL = fileURL,
+                   let text = try? String(contentsOf: fileURL, encoding: .utf8), !text.isEmpty {
+                    let truncated = text.count > 24_000
+                        ? String(text.prefix(24_000)) + "\n[truncated]"
+                        : text
+                    userText = "File: \(name)\n\n\(truncated)\n\n" + query
+                } else {
+                    userText = "File: \(name)\n\n" + query
+                }
+            }
+        }
+        msgs.append(["role": "user", "content": userText])
+        conversationMessages.append(["role": "user", "content": userText])
+
+        let placeholder = ChatMessage(role: .assistant, content: "")
+        let msgId = placeholder.id
+        state.chatHistory.append(placeholder)
+        state.stateOverride = .thinking
+        let modelCopy = state.activeChatModel
+
+        // Plain role/content strings, never touched again here: safe to hand to the bridge.
+        nonisolated(unsafe) let payload = msgs
+        do {
+            let final = try await AntigravityBridge.streamChat(
+                query: userText,
+                context: context,
+                model: modelCopy,
+                messages: payload
+            ) { [state, msgId] visible in
+                if !visible.isEmpty, state.stateOverride == .thinking {
+                    state.stateOverride = nil
+                }
+                if let idx = state.chatHistory.firstIndex(where: { $0.id == msgId }) {
+                    state.chatHistory[idx].content = visible
+                }
+            }
+            conversationMessages.append(["role": "assistant", "content": final])
+            if let idx = state.chatHistory.firstIndex(where: { $0.id == msgId }) {
+                state.chatHistory[idx].content = final
+            }
+            state.stateOverride = nil
+            state.view = .prompt
+            NotificationCenter.default.post(name: .triggerEmote, object: BotEmote.happy)
+
+            let activePersona = PersonaStore.shared.activePersona
+            if activePersona.connections.canDelegate {
+                await MochiMeshOrchestrator.processDelegations(in: final, caller: activePersona, state: state)
+            }
+        } catch let e as LocalChatError {
+            conversationMessages.removeLast()
+            state.chatHistory.removeAll { $0.id == msgId }
+            state.stateOverride = nil
+            await showError(e.errorDescription ?? e.localizedDescription, state: state)
+        } catch {
+            conversationMessages.removeLast()
+            state.chatHistory.removeAll { $0.id == msgId }
+            state.stateOverride = nil
+            await showError(error.localizedDescription, state: state)
+        }
+    }
+
+    // MARK: - Zed Subscription Bridge Chat
+
+    func chatZed(query: String, context: PromptContext?, state: AppState) async {
+        let personaPrompt = ClaudeService.makeSystemPrompt(persona: PersonaStore.shared.activePersona)
+        var msgs: [[String: Any]] = [["role": "system", "content": personaPrompt]]
+        for m in conversationMessages {
+            var simplified = m
+            if let content = m["content"] as? [[String: Any]],
+               let textBlock = content.first(where: { ($0["type"] as? String) == "text" }),
+               let text = textBlock["text"] as? String {
+                simplified["content"] = text
+            }
+            msgs.append(simplified)
+        }
+        var userText = query
+        if conversationMessages.isEmpty, let ctx = context {
+            switch ctx {
+            case .window(let app, let title, let url):
+                var prefix = "Context — App: \(app), Window: \(title)"
+                if let u = url { prefix += ", URL: \(u)" }
+                userText = prefix + "\n\n" + query
+            case .file(let name, let fileURL):
+                if let fileURL = fileURL,
+                   let text = try? String(contentsOf: fileURL, encoding: .utf8), !text.isEmpty {
+                    let truncated = text.count > 24_000
+                        ? String(text.prefix(24_000)) + "\n[truncated]"
+                        : text
+                    userText = "File: \(name)\n\n\(truncated)\n\n" + query
+                } else {
+                    userText = "File: \(name)\n\n" + query
+                }
+            }
+        }
+        msgs.append(["role": "user", "content": userText])
+        conversationMessages.append(["role": "user", "content": userText])
+
+        let placeholder = ChatMessage(role: .assistant, content: "")
+        let msgId = placeholder.id
+        state.chatHistory.append(placeholder)
+        state.stateOverride = .thinking
+        let modelCopy = state.activeChatModel
+
+        // Plain role/content strings, never touched again here: safe to hand to the bridge.
+        nonisolated(unsafe) let payload = msgs
+        do {
+            let final = try await ZedBridge.streamChat(
+                query: userText,
+                context: context,
+                model: modelCopy,
+                messages: payload
+            ) { [state, msgId] visible in
+                if !visible.isEmpty, state.stateOverride == .thinking {
+                    state.stateOverride = nil
+                }
+                if let idx = state.chatHistory.firstIndex(where: { $0.id == msgId }) {
+                    state.chatHistory[idx].content = visible
+                }
+            }
+            conversationMessages.append(["role": "assistant", "content": final])
+            if let idx = state.chatHistory.firstIndex(where: { $0.id == msgId }) {
+                state.chatHistory[idx].content = final
+            }
+            state.stateOverride = nil
+            state.view = .prompt
+            NotificationCenter.default.post(name: .triggerEmote, object: BotEmote.happy)
+
+            let activePersona = PersonaStore.shared.activePersona
+            if activePersona.connections.canDelegate {
+                await MochiMeshOrchestrator.processDelegations(in: final, caller: activePersona, state: state)
+            }
+        } catch let e as LocalChatError {
+            conversationMessages.removeLast()
+            state.chatHistory.removeAll { $0.id == msgId }
+            state.stateOverride = nil
+            await showError(e.errorDescription ?? e.localizedDescription, state: state)
+        } catch {
+            conversationMessages.removeLast()
+            state.chatHistory.removeAll { $0.id == msgId }
+            state.stateOverride = nil
+            await showError(error.localizedDescription, state: state)
+        }
+    }
+
     // MARK: - OpenAI-compatible chat (Google Gemini / OpenAI / Ollama / LM Studio)
 
-    func chatOpenAICompatible(query: String, context: PromptContext?, state: AppState) async {
-        let provider = state.chatProvider
+    func chatOpenAICompatible(query: String, context: PromptContext?, state: AppState, providerOverride: ChatProvider? = nil) async {
+        let provider = providerOverride ?? state.chatProvider
         guard provider != .anthropic else { return }
 
         let baseURL: String
@@ -313,7 +527,8 @@ final class ClaudeService {
             case .deepseek:  baseURL = "https://api.deepseek.com/v1"
             case .qwen:      baseURL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
             case .moonshot:  baseURL = "https://api.moonshot.cn/v1"
-            case .anthropic, .ollama, .lmstudio: baseURL = ""
+            case .openrouter: baseURL = "https://openrouter.ai/api/v1"
+            case .anthropic, .ollama, .lmstudio, .antigravity, .zed: baseURL = ""
             }
         }
 
@@ -324,7 +539,7 @@ final class ClaudeService {
             }
             return
         }
-        guard let url = URL(string: "\(baseURL)/chat/completions") else { return }
+        guard let url = URL(string: LocalChat.chatCompletionsEndpoint(baseURL: baseURL)) else { return }
 
         // Auth header
         let authHeader: String
@@ -338,8 +553,15 @@ final class ClaudeService {
             authHeader = "Bearer \(key)"
         }
 
+        var extraHeaders: [String: String] = [:]
+        if provider == .openrouter {
+            extraHeaders["HTTP-Referer"] = "https://coucou.app"
+            extraHeaders["X-Title"] = "Coucou"
+        }
+
         // Build messages
-        var msgs: [[String: Any]] = [["role": "system", "content": systemPrompt]]
+        let personaPrompt = ClaudeService.makeSystemPrompt(persona: PersonaStore.shared.activePersona)
+        var msgs: [[String: Any]] = [["role": "system", "content": personaPrompt]]
         for m in conversationMessages {
             var simplified = m
             if let content = m["content"] as? [[String: Any]],
@@ -378,8 +600,10 @@ final class ClaudeService {
         conversationMessages.append(["role": "user", "content": userText])
 
         let useStream = provider.isLocal || provider == .deepseek || provider == .qwen || provider == .moonshot
+            || provider == .openrouter
+        let requestedModel = PersonaStore.shared.activePersona.modelOverride ?? state.activeChatModel
         var body: [String: Any] = [
-            "model": state.activeChatModel,
+            "model": requestedModel,
             "max_tokens": 4096,
             "messages": msgs,
         ]
@@ -389,6 +613,9 @@ final class ClaudeService {
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue(authHeader, forHTTPHeaderField: "Authorization")
+        for (k, v) in extraHeaders {
+            req.setValue(v, forHTTPHeaderField: k)
+        }
         req.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
         if useStream {
@@ -397,7 +624,7 @@ final class ClaudeService {
             let msgId = placeholder.id
             state.chatHistory.append(placeholder)
             state.stateOverride = .thinking
-            let modelCopy = state.activeChatModel
+            let modelCopy = requestedModel
             let streamBody: [String: Any] = [
                 "model": modelCopy,
                 "messages": msgs,
@@ -409,7 +636,9 @@ final class ClaudeService {
                 let final = try await LocalChat.streamChat(
                     baseURL: baseURL,
                     encodedBody: encodedBody,
-                    model: modelCopy
+                    model: modelCopy,
+                    authHeader: authHeader,
+                    extraHeaders: extraHeaders
                 ) { [state, msgId] visible in
                     if !visible.isEmpty, state.stateOverride == .thinking {
                         state.stateOverride = nil   // hide typing dots on first visible text
@@ -425,6 +654,21 @@ final class ClaudeService {
                 state.stateOverride = nil
                 state.view = .prompt
                 NotificationCenter.default.post(name: .triggerEmote, object: BotEmote.happy)
+
+                let activePersona = PersonaStore.shared.activePersona
+                if activePersona.deviceAccess.isEnabled {
+                    let execs = DeviceOrchestrator.parseExecCommands(from: final)
+                    for cmd in execs {
+                        _ = await DeviceOrchestrator.executeShell(command: cmd)
+                    }
+                    let scripts = DeviceOrchestrator.parseAppleScripts(from: final)
+                    for script in scripts {
+                        _ = await DeviceOrchestrator.executeAppleScript(script: script)
+                    }
+                }
+                if activePersona.connections.canDelegate {
+                    await MochiMeshOrchestrator.processDelegations(in: final, caller: activePersona, state: state)
+                }
             } catch let e as LocalChatError {
                 conversationMessages.removeLast()
                 state.chatHistory.removeAll { $0.id == msgId }
@@ -474,6 +718,11 @@ final class ClaudeService {
                 state.stateOverride = nil
                 state.view = .prompt
                 NotificationCenter.default.post(name: .triggerEmote, object: BotEmote.happy)
+
+                let activePersona = PersonaStore.shared.activePersona
+                if activePersona.connections.canDelegate {
+                    await MochiMeshOrchestrator.processDelegations(in: trimmed, caller: activePersona, state: state)
+                }
             } catch {
                 conversationMessages.removeLast()
                 await showError(error.localizedDescription, state: state)
@@ -666,6 +915,45 @@ final class ClaudeService {
         // Store full content (includes tool_use/tool_result blocks) for correct multi-turn context
         conversationMessages.append(["role": "assistant", "content": content])
 
+        // Handle tool use calls (e.g. MCP tools)
+        if let stopReason = json["stop_reason"] as? String, stopReason == "tool_use" {
+            var toolResults: [[String: Any]] = []
+            for block in content where (block["type"] as? String) == "tool_use" {
+                if let toolId = block["id"] as? String,
+                   let toolName = block["name"] as? String,
+                   let input = block["input"] as? [String: Any] {
+                    state.stateOverride = .working
+                    let result = try? await MCPClientManager.shared.executeTool(name: toolName, arguments: input)
+                    let text = result?.text ?? "(executed)"
+                    toolResults.append([
+                        "type": "tool_result",
+                        "tool_use_id": toolId,
+                        "content": text,
+                        "is_error": result?.isError ?? false
+                    ])
+                }
+            }
+            if !toolResults.isEmpty {
+                conversationMessages.append(["role": "user", "content": toolResults])
+                let personaPrompt = ClaudeService.makeSystemPrompt(persona: PersonaStore.shared.activePersona)
+                var activeTools = webSearchTools
+                for tool in MCPClientManager.shared.activeTools {
+                    activeTools.append(tool.toAnthropicTool())
+                }
+                let body: [String: Any] = [
+                    "model": model,
+                    "max_tokens": 4096,
+                    "tools": activeTools,
+                    "system": personaPrompt,
+                    "messages": conversationMessages,
+                ]
+                if let key = apiKey, let nextData = try? await callAPI(body: body, key: key, beta: "web-search-2025-03-05") {
+                    await handleChatResult(nextData, state: state)
+                    return
+                }
+            }
+        }
+
         guard let text = claudeResponseText(fromContent: content) else {
             await showError("No response text.", state: state)
             return
@@ -677,6 +965,11 @@ final class ClaudeService {
         state.stateOverride = nil
         state.view = .prompt
         NotificationCenter.default.post(name: .triggerEmote, object: BotEmote.happy)
+
+        let activePersona = PersonaStore.shared.activePersona
+        if activePersona.connections.canDelegate {
+            await MochiMeshOrchestrator.processDelegations(in: text, caller: activePersona, state: state)
+        }
     }
 
     // MARK: - Structured result handler

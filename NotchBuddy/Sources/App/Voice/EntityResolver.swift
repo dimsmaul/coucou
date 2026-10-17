@@ -26,6 +26,11 @@ enum EntityResolver {
         "vee s code":           "integration_claude",
         "vi s code":            "integration_claude",
         "vsco":                 "integration_claude",
+        // VSCodium
+        "vscodium":             "agent_vscodium",
+        "codium":               "agent_vscodium",
+        "vs codium":            "agent_vscodium",
+        "v s codium":           "agent_vscodium",
         // Agents
         "gemini":               "agent_gemini",
         "copilot":              "agent_copilot",

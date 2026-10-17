@@ -61,9 +61,6 @@ struct BotStateCfg {
     let sound: String?
 }
 
-enum EyeShape: String {
-    case pill, wide, dot, line, flat, happy, closed, spiral, heart, star, tired, wink, cup
-}
 
 enum BadgeType {
     case dots(CGColor)
@@ -1437,8 +1434,51 @@ final class BotEngine: ObservableObject {
     private func drawBody(ctx: inout GraphicsContext, path: Path, R: CGFloat, rx: CGFloat, ry: CGFloat,
                           pumpkinColors: Bool = false) {
         if let bc = bodyColor, !pumpkinColors {
-            // Mini bots: flat solid fill — no gradient, no reflection, no highlight
-            ctx.fill(path, with: .color(Color(cgColor: bc)))
+            if isMini {
+                // Mini bots: flat solid fill — no gradient, no reflection, no highlight
+                ctx.fill(path, with: .color(Color(cgColor: bc)))
+            } else {
+                // Main bot: 3D gradient derived from persona bodyColor
+                let c0 = mix3(cgColorToTuple(bc), (1, 1, 1), 0.22)
+                let c1 = mix3(cgColorToTuple(bc), (0, 0, 0), 0.15)
+                ctx.fill(path, with: .linearGradient(
+                    Gradient(colors: [colorFromTuple(c0), colorFromTuple(c1)]),
+                    startPoint: CGPoint(x: rx*0.7, y: -ry*0.85),
+                    endPoint: CGPoint(x: -rx*0.8, y: ry*0.9)
+                ))
+                // State tint — fades out as morph increases (mailbox has no tint)
+                let effectiveTint = tint * (1 - morph)
+                if effectiveTint > 0.01 {
+                    let tc = colorFromTuple(col)
+                    ctx.fill(path, with: .linearGradient(
+                        Gradient(stops: [
+                            .init(color: tc.opacity(Double(0.72 * effectiveTint)), location: 0),
+                            .init(color: tc.opacity(0), location: 1)
+                        ]),
+                        startPoint: CGPoint(x: 0, y: ry),
+                        endPoint: CGPoint(x: 0, y: -ry)
+                    ))
+                }
+                // Shadow rim
+                ctx.fill(path, with: .radialGradient(
+                    Gradient(stops: [
+                        .init(color: .clear, location: 0),
+                        .init(color: .clear, location: 0.6),
+                        .init(color: Color.black.opacity(0.2), location: 1)
+                    ]),
+                    center: .zero, startRadius: R*0.15, endRadius: R*1.25
+                ))
+                // Highlight
+                ctx.fill(path, with: .radialGradient(
+                    Gradient(stops: [
+                        .init(color: Color.white.opacity(0.48), location: 0),
+                        .init(color: .clear, location: 1)
+                    ]),
+                    center: CGPoint(x: rx*0.34, y: -ry*0.46),
+                    startRadius: 0,
+                    endRadius: R*0.42
+                ))
+            }
         } else {
             // Main bot: linear gradient body
             let top: Color = pumpkinColors ? Color(hex: "#FFA94D") : Color(red: 0.929, green: 0.929, blue: 0.937)

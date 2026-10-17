@@ -45,6 +45,14 @@ struct IslandViewContent: View {
             #else
             EmptyView()
             #endif
+        case .pouch:
+            #if !APPSTORE
+            PouchView()
+            #else
+            EmptyView()
+            #endif
+        case .pomodoro:
+            PomodoroIslandView(state: state)
         }
     }
 }
@@ -53,7 +61,6 @@ struct IslandViewContent: View {
 
 struct OverviewView: View {
     @ObservedObject var state: AppState
-    @State private var showingN8nDetail = false
     @State private var activeDiffId: Int? = nil
 
     var agent: AgentTask? { state.focusTask }
@@ -67,7 +74,7 @@ struct OverviewView: View {
                 // Title row + ticker stacked (or integration card)
                 if let agent = agent {
                     if agent.isIntegration {
-                        IntegrationCardView(task: agent, showingDetail: $showingN8nDetail, onDiffTap: { diffIdx in
+                        IntegrationCardView(task: agent, showingDetail: $state.showingIntegrationDetail, onDiffTap: { diffIdx in
                             withAnimation(.easeIn(duration: 0.16)) { activeDiffId = diffIdx }
                         })
                     } else {
@@ -156,9 +163,9 @@ struct OverviewView: View {
 
                 // ↗ jump button — last in ZStack so it renders on top; hidden while any detail is open
                 #if !APPSTORE
-                let hideJumpButton = showingN8nDetail || state.showingPlanDetail || activeDiffId != nil
+                let hideJumpButton = state.showingIntegrationDetail || state.showingPlanDetail || activeDiffId != nil
                 #else
-                let hideJumpButton = showingN8nDetail || activeDiffId != nil
+                let hideJumpButton = state.showingIntegrationDetail || activeDiffId != nil
                 #endif
                 if !hideJumpButton {
                     Button(action: { openAgentTarget(agent) }) {
@@ -183,24 +190,36 @@ struct OverviewView: View {
             }
         }
         .onChange(of: state.focusId) { _, new in
-            showingN8nDetail = false
+            state.showingIntegrationDetail = false
             activeDiffId = nil
             #if !APPSTORE
             withAnimation(.easeIn(duration: 0.16)) { state.showingPlanDetail = false }
             #endif
             if new == "integration_github" { GithubPoller.shared.refreshIfStale() }
+            if new == "integration_huggingface" { HuggingFacePoller.shared.refreshIfStale() }
         }
         #if !APPSTORE
         .onChange(of: state.view) { _, v in
-            if v != .overview { state.showingPlanDetail = false; activeDiffId = nil }
+            if v != .overview {
+                state.showingIntegrationDetail = false
+                state.showingPlanDetail = false
+                activeDiffId = nil
+            }
         }
         #endif
         .onChange(of: state.mode) { _, m in
-            #if !APPSTORE
-            if m != .expanded { state.showingPlanDetail = false; activeDiffId = nil }
-            #endif
+            if m != .expanded {
+                state.showingIntegrationDetail = false
+                #if !APPSTORE
+                state.showingPlanDetail = false
+                #endif
+                activeDiffId = nil
+            }
             if m == .expanded && state.focusId == "integration_github" {
                 GithubPoller.shared.refreshIfStale()
+            }
+            if m == .expanded && state.focusId == "integration_huggingface" {
+                HuggingFacePoller.shared.refreshIfStale()
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .islandToggleDiff)) { _ in
@@ -219,9 +238,13 @@ struct OverviewView: View {
         switch task.id {
         case "integration_claude":
             if ClaudeHost.activate(task.hostApp) { return }
-            let vscodeBundleId = "com.microsoft.VSCode"
-            if let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == vscodeBundleId }) {
-                app.activate(options: .activateIgnoringOtherApps)
+            let ids = ["com.microsoft.VSCode", "com.microsoft.VSCodeInsiders", "com.vscodium", "com.vscodium.codium", "com.visualstudio.code.oss"]
+            if let running = ids.compactMap({ id in
+                NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier == id }
+            }).first {
+                running.activate()
+            } else if let appURL = ids.compactMap({ NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) }).first {
+                NSWorkspace.shared.openApplication(at: appURL, configuration: .init(), completionHandler: nil)
             } else {
                 NSWorkspace.shared.open(URL(fileURLWithPath: "/Applications/Visual Studio Code.app"))
             }
@@ -251,6 +274,10 @@ struct OverviewView: View {
             NSWorkspace.shared.open(URL(string: "https://dashboard.stripe.com/payments")!)
         case "integration_notion":
             NSWorkspace.shared.open(URL(string: "https://notion.so")!)
+        case "integration_huggingface":
+            let username = AppState.shared.huggingFaceUser?.name ?? ""
+            let urlStr = username.isEmpty ? "https://huggingface.co" : "https://huggingface.co/\(username)"
+            if let url = URL(string: urlStr) { NSWorkspace.shared.open(url) }
         case "integration_calcom":
             NSWorkspace.shared.open(URL(string: "https://app.cal.com/bookings")!)
         case "agent_cursor":
@@ -259,6 +286,10 @@ struct OverviewView: View {
                 withBundleIdentifier: "com.todesktop.230313mzl4w4u92") {
                 NSWorkspace.shared.openApplication(at: url, configuration: .init(), completionHandler: nil)
             }
+            #endif
+        case "agent_vscodium":
+            #if !APPSTORE
+            VSCodiumBridge.open()
             #endif
         case "agent_codex":
             #if !APPSTORE
@@ -284,6 +315,12 @@ struct OverviewView: View {
             switchChatProvider(.ollama)
         case "ai_lmstudio":
             switchChatProvider(.lmstudio)
+        case "ai_openrouter":
+            switchChatProvider(.openrouter)
+        case "ai_antigravity":
+            switchChatProvider(.antigravity)
+        case "ai_zed":
+            switchChatProvider(.zed)
         case "integration_music":
             #if !APPSTORE
             MusicController.shared.openMusic()
@@ -1290,11 +1327,88 @@ private struct DictationLanguageMenu: View {
 }
 #endif
 
+struct PersonaPickerPopoverView: View {
+    @Binding var isPresented: Bool
+    @ObservedObject private var store = PersonaStore.shared
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(String(localized: "Mochi Persona"))
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(Color(hex: "#8A8F98"))
+                .padding(.horizontal, 4)
+                .padding(.top, 4)
+
+            ScrollView {
+                VStack(spacing: 3) {
+                    ForEach(store.personas) { persona in
+                        Button {
+                            store.selectPersona(id: persona.id)
+                            SoundEngine.shared.play("pop")
+                            NotificationCenter.default.post(name: .triggerEmote, object: BotEmote.happy)
+                            isPresented = false
+                        } label: {
+                            HStack(spacing: 8) {
+                                MochiStill(
+                                    state: .idle,
+                                    eye: persona.eyeShape,
+                                    bodyHex: persona.bodyColorHex,
+                                    showBadge: false,
+                                    outfit: persona.outfit
+                                )
+                                .frame(width: 22, height: 22)
+
+                                VStack(alignment: .leading, spacing: 1) {
+                                    HStack(spacing: 4) {
+                                        Text(persona.name)
+                                            .font(.system(size: 11.5, weight: .medium))
+                                            .foregroundColor(Color(hex: "#F5F6F8"))
+                                        let activeMCPs = persona.mcpServers.filter { $0.isEnabled }
+                                        if !activeMCPs.isEmpty {
+                                            Text("\(activeMCPs.count) MCP")
+                                                .font(.system(size: 7.5, weight: .bold))
+                                                .padding(.horizontal, 4)
+                                                .padding(.vertical, 1)
+                                                .background(Color(hex: "#10B981").opacity(0.2))
+                                                .foregroundColor(Color(hex: "#10B981"))
+                                                .clipShape(RoundedRectangle(cornerRadius: 3))
+                                        }
+                                    }
+                                    Text(persona.role)
+                                        .font(.system(size: 9.5))
+                                        .foregroundColor(Color(hex: "#8E939C"))
+                                        .lineLimit(1)
+                                }
+                                Spacer()
+                                if store.activePersonaId == persona.id {
+                                    Image(systemName: "checkmark")
+                                        .font(.system(size: 9, weight: .bold))
+                                        .foregroundColor(Color(hex: persona.bodyColorHex))
+                                }
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 5)
+                            .background(store.activePersonaId == persona.id ? Color.white.opacity(0.08) : Color.clear)
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .frame(maxHeight: 220)
+        }
+        .padding(8)
+        .background(Color(hex: "#16171B"))
+    }
+}
+
 struct PromptView: View {
     @ObservedObject var state: AppState
+    @ObservedObject private var personaStore = PersonaStore.shared
     @State private var text: String = ""
     @FocusState private var focused: Bool
     @State private var showModelPicker = false
+    @State private var showPersonaPicker = false
 
     #if !APPSTORE
     @State private var dictation = MacDictation()
@@ -1350,8 +1464,38 @@ struct PromptView: View {
                     Spacer()
                 }
 
-                HStack(spacing: 0) {
+                HStack(spacing: 6) {
+                    // Persona selector pill
+                    Button {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
+                            showPersonaPicker.toggle()
+                        }
+                    } label: {
+                        let persona = personaStore.activePersona
+                        HStack(spacing: 5) {
+                            Circle()
+                                .fill(Color(hex: persona.bodyColorHex))
+                                .frame(width: 6, height: 6)
+                            Text(persona.name)
+                                .font(.system(size: 10.5, weight: .medium))
+                                .foregroundColor(Color(hex: "#C8CDD4"))
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.system(size: 8))
+                                .foregroundColor(Color(hex: "#5C6370"))
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.white.opacity(0.06))
+                        .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .popover(isPresented: $showPersonaPicker, arrowEdge: .bottom) {
+                        PersonaPickerPopoverView(isPresented: $showPersonaPicker)
+                            .frame(width: 280)
+                    }
+
                     Spacer()
+
                     Button {
                         withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
                             showModelPicker.toggle()
@@ -1511,9 +1655,19 @@ struct ChipFlowLayout: Layout {
 struct ModelPickerView: View {
     @ObservedObject var state: AppState
     @Binding var isPresented: Bool
+    @State private var searchText: String = ""
+
+    private var filteredModels: [(id: String, label: String)] {
+        guard let models = state.fetchedProviderModels[state.chatProvider] else { return [] }
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return models }
+        return models.filter {
+            $0.id.lowercased().contains(query) || $0.label.lowercased().contains(query)
+        }
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
             // Provider chips — wrap; hide local providers when not connected and not already active
             let visibleProviders = ChatProvider.allCases.filter { p in
                 if p == .ollama   { return !AppState.shared.ollamaServerURL.isEmpty   || state.chatProvider == .ollama }
@@ -1555,6 +1709,33 @@ struct ModelPickerView: View {
 
             Divider().opacity(0.2)
 
+            // Search bar: shown whenever models are available
+            if let models = state.fetchedProviderModels[state.chatProvider], models.count > 4 || !searchText.isEmpty {
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 11))
+                        .foregroundColor(Color(hex: "#8A8F98"))
+                    TextField(String(localized: "Search models…"), text: $searchText)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 11.5))
+                        .foregroundColor(Color(hex: "#F1F2F4"))
+                    if !searchText.isEmpty {
+                        Button {
+                            searchText = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.system(size: 11))
+                                .foregroundColor(Color(hex: "#8A8F98"))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color.white.opacity(0.06)))
+                .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).stroke(Color.white.opacity(0.08), lineWidth: 1))
+            }
+
             // Model list for current provider — fetched dynamically
             modelListView
                 .frame(height: 260, alignment: .top)
@@ -1570,6 +1751,7 @@ struct ModelPickerView: View {
             state.fetchModelsIfNeeded(for: state.chatProvider)
         }
         .onChange(of: state.chatProvider) { _, provider in
+            searchText = ""
             if provider.isLocal {
                 state.fetchedProviderModels[provider] = nil
                 state.providerModelFetchError[provider] = nil
@@ -1594,45 +1776,64 @@ struct ModelPickerView: View {
                 .font(.system(size: 11))
                 .foregroundColor(Color(hex: "#8A8F98"))
                 .padding(.vertical, 4)
-        } else if let models = state.fetchedProviderModels[state.chatProvider] {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 2) {
-                    ForEach(models, id: \.id) { model in
-                        Button {
-                            switch state.chatProvider {
-                            case .anthropic: state.claudeModel = model.id
-                            case .google:    state.googleChatModel = model.id
-                            case .openai:    state.openAIChatModel = model.id
-                            case .ollama:    state.ollamaChatModel = model.id
-                            case .lmstudio:  state.lmstudioChatModel = model.id
-                            case .deepseek:  state.deepseekChatModel = model.id
-                            case .qwen:      state.qwenChatModel = model.id
-                            case .moonshot:  state.moonshotChatModel = model.id
-                            }
-                            isPresented = false
-                            SoundEngine.shared.play("blip")
-                        } label: {
-                            HStack {
-                                Text(model.label)
-                                    .font(.system(size: 12))
-                                    .foregroundColor(state.activeChatModel == model.id
-                                                     ? Color(hex: state.chatProvider.accentHex)
-                                                     : Color(hex: "#C8CDD4"))
-                                Spacer()
-                                if state.activeChatModel == model.id {
-                                    Image(systemName: "checkmark")
-                                        .font(.system(size: 10, weight: .semibold))
-                                        .foregroundColor(Color(hex: state.chatProvider.accentHex))
+        } else if let _ = state.fetchedProviderModels[state.chatProvider] {
+            let models = filteredModels
+            if models.isEmpty {
+                VStack(spacing: 6) {
+                    Spacer()
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 14))
+                        .foregroundColor(Color(hex: "#5C6370"))
+                    Text(verbatim: "No models matching “\(searchText)”")
+                        .font(.system(size: 11))
+                        .foregroundColor(Color(hex: "#8A8F98"))
+                        .multilineTextAlignment(.center)
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(models, id: \.id) { model in
+                            Button {
+                                switch state.chatProvider {
+                                case .anthropic: state.claudeModel = model.id
+                                case .google:    state.googleChatModel = model.id
+                                case .openai:    state.openAIChatModel = model.id
+                                case .ollama:    state.ollamaChatModel = model.id
+                                case .lmstudio:  state.lmstudioChatModel = model.id
+                                case .deepseek:  state.deepseekChatModel = model.id
+                                case .qwen:      state.qwenChatModel = model.id
+                                case .moonshot:  state.moonshotChatModel = model.id
+                                case .openrouter: state.openrouterChatModel = model.id
+                                case .antigravity: state.antigravityChatModel = model.id
+                                case .zed:       state.zedChatModel = model.id
                                 }
+                                isPresented = false
+                                SoundEngine.shared.play("blip")
+                            } label: {
+                                HStack {
+                                    Text(model.label)
+                                        .font(.system(size: 12))
+                                        .foregroundColor(state.activeChatModel == model.id
+                                                         ? Color(hex: state.chatProvider.accentHex)
+                                                         : Color(hex: "#C8CDD4"))
+                                    Spacer()
+                                    if state.activeChatModel == model.id {
+                                        Image(systemName: "checkmark")
+                                            .font(.system(size: 10, weight: .semibold))
+                                            .foregroundColor(Color(hex: state.chatProvider.accentHex))
+                                    }
+                                }
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 6)
+                                .background(state.activeChatModel == model.id
+                                            ? Color(hex: state.chatProvider.accentHex).opacity(0.1)
+                                            : Color.clear)
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
                             }
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 6)
-                            .background(state.activeChatModel == model.id
-                                        ? Color(hex: state.chatProvider.accentHex).opacity(0.1)
-                                        : Color.clear)
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
                     }
                 }
             }
@@ -1812,15 +2013,16 @@ struct IntegrationCardView: View {
     var onDiffTap: ((Int) -> Void)? = nil
     @ObservedObject private var appState = AppState.shared
     @State private var githubDetailSection: GitHubDetailSection = .myPRs
+    @State private var huggingFaceDetailSection: HuggingFaceDetailSection = .models
     #if !APPSTORE
     @ObservedObject private var mailController = MailController.shared
     #endif
 
     private var isConfigured: Bool {
         switch task.id {
-        // Cursor sessions are Claude Code running in Cursor's integrated terminal,
-        // so the Cursor pill is set up exactly when the Claude Code hooks are.
-        case "integration_claude", "agent_cursor":
+        // Cursor and VSCodium sessions are Claude Code running in the editor's integrated terminal,
+        // so their pills are set up exactly when the Claude Code hooks are.
+        case "integration_claude", "agent_cursor", "agent_vscodium":
             return HookServer.claudeHooksInstalled()
         case "agent_codex":
             #if !APPSTORE
@@ -1896,9 +2098,10 @@ struct IntegrationCardView: View {
         case "integration_resend":  return KeychainStore.shared.get("resend-api-key") != nil
         case "integration_n8n":     return KeychainStore.shared.get("n8n-api-key")    != nil
         case "integration_vercel":  return KeychainStore.shared.get("vercel-token")   != nil
-        case "integration_github":  return KeychainStore.shared.get("github-token")   != nil
+        case "integration_github":  return KeychainStore.shared.get("github-token")   != nil || GitHubAccountManager.shared.activeAccount != nil
         case "integration_stripe":  return KeychainStore.shared.get("stripe-api-key") != nil
         case "integration_notion":  return KeychainStore.shared.get("notion-api-key") != nil
+        case "integration_huggingface": return HuggingFacePoller.shared.hasToken
         case "integration_calcom":  return KeychainStore.shared.get("calcom-api-key") != nil
         default: return false
         }
@@ -1915,6 +2118,9 @@ struct IntegrationCardView: View {
         case "integration_github":  return URL(string: "https://github.com")
         case "integration_stripe":  return URL(string: "https://dashboard.stripe.com/payments")
         case "integration_notion":  return URL(string: "https://notion.so")
+        case "integration_huggingface":
+            let username = appState.huggingFaceUser?.name ?? ""
+            return URL(string: username.isEmpty ? "https://huggingface.co" : "https://huggingface.co/\(username)")
         case "integration_calcom":  return URL(string: "https://app.cal.com/bookings")
         default: return nil
         }
@@ -1966,6 +2172,11 @@ struct IntegrationCardView: View {
     // Notion: show pages as soon as first poll completes
     private var notionHasData: Bool {
         task.id == "integration_notion" && appState.notionLoaded
+    }
+
+    // Hugging Face: show card as soon as first poll completes
+    private var huggingfaceHasData: Bool {
+        task.id == "integration_huggingface" && appState.huggingFaceUser != nil
     }
 
     // Apple Music: show card when a track is loaded (playing or paused) or automation is denied
@@ -2037,6 +2248,7 @@ struct IntegrationCardView: View {
         if PillCatalog.definition(for: task.id)?.comingSoon == true { return String(localized: "Coming soon") }
         let svcErr = task.id == "integration_stripe" ? appState.stripeError
                    : task.id == "integration_calcom"  ? appState.calcomError
+                   : task.id == "integration_huggingface" ? appState.huggingFaceError
                    : nil
         if let err = svcErr { return err }
         // Pills driven by hooks, never by a key: the idle card reports whether the
@@ -2044,9 +2256,10 @@ struct IntegrationCardView: View {
         // nothing left to load — a session replaces this card, it never resolves here.
         let isHooks = task.id == "integration_claude" || task.id == "agent_gemini"
                    || task.id == "agent_antigravity"  || task.id == "agent_cursor"
-                   || task.id == "agent_codex"        || task.id == "agent_copilot"
-                   || task.id == "agent_muse"         || task.id == "agent_opencode"
-                   || task.id == "agent_amp"          || task.id == "agent_hermes"
+                   || task.id == "agent_vscodium"     || task.id == "agent_codex"
+                   || task.id == "agent_copilot"      || task.id == "agent_muse"
+                   || task.id == "agent_opencode"     || task.id == "agent_amp"
+                   || task.id == "agent_hermes"
         let isAI    = ChatProvider(pillID: task.id) != nil
         if isConfigured {
             if isHooks { return String(localized: "Hooks installed") }
@@ -2121,6 +2334,36 @@ struct IntegrationCardView: View {
             .transition(.opacity)
         } else if githubHasData {
             GitHubStatsCardView(stats: appState.githubStats!)
+                .transition(.opacity)
+        } else if task.id == "integration_github" {
+            GitHubEmptyCardView()
+                .transition(.opacity)
+        } else if showingDetail && huggingfaceHasData {
+            HuggingFaceDetailView(
+                section: huggingFaceDetailSection,
+                user: appState.huggingFaceUser!,
+                models: appState.huggingFaceModels,
+                datasets: appState.huggingFaceDatasets,
+                spaces: appState.huggingFaceSpaces,
+                onBack: {
+                    withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) { showingDetail = false }
+                }
+            )
+            .transition(.opacity)
+        } else if huggingfaceHasData {
+            HuggingFacePulseCardView(
+                user: appState.huggingFaceUser!,
+                models: appState.huggingFaceModels,
+                datasets: appState.huggingFaceDatasets,
+                spaces: appState.huggingFaceSpaces,
+                onTapSection: { section in
+                    huggingFaceDetailSection = section
+                    withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) { showingDetail = true }
+                }
+            )
+            .transition(.opacity)
+        } else if task.id == "integration_huggingface" {
+            HuggingFaceEmptyCardView()
                 .transition(.opacity)
         } else if stripeHasData {
             StripeCardView()
@@ -2242,6 +2485,13 @@ struct IntegrationCardView: View {
                             .buttonStyle(.plain)
                         }
                         #endif
+                    } else if task.id == "agent_vscodium" {
+                        #if !APPSTORE
+                        Button("Open VSCodium") { openVSCodium() }
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(Color(hex: task.color).opacity(0.85))
+                            .buttonStyle(.plain)
+                        #endif
                     } else if task.id == "agent_codex" {
                         #if !APPSTORE
                         if let url = NSWorkspace.shared.urlForApplication(
@@ -2331,9 +2581,10 @@ struct IntegrationCardView: View {
                             .foregroundColor(Color(hex: "#C9956A").opacity(0.85))
                             .buttonStyle(.plain)
                     }
-                    // Settings button: shown when not configured, except cursor/codex and music
+                    // Settings button: shown when not configured, except cursor/vscodium/codex and music
                     if !isConfigured
                        && task.id != "agent_cursor"
+                       && task.id != "agent_vscodium"
                        && task.id != "agent_codex"
                        && task.id != "integration_music"
                        && task.id != "integration_mail" {
@@ -2360,8 +2611,14 @@ struct IntegrationCardView: View {
         }
     }
 
+    private func openVSCodium() {
+        #if !APPSTORE
+        VSCodiumBridge.open(workspacePath: task.sessionCwd)
+        #endif
+    }
+
     private func openVSCode() {
-        let ids = ["com.microsoft.VSCode", "com.microsoft.VSCodeInsiders", "com.vscodium.codium"]
+        let ids = ["com.microsoft.VSCode", "com.microsoft.VSCodeInsiders", "com.vscodium", "com.vscodium.codium", "com.visualstudio.code.oss"]
         let appURL = ids.compactMap { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) }.first
 
         // If we have a project folder, open it directly in VS Code
@@ -2379,7 +2636,7 @@ struct IntegrationCardView: View {
         if let running = ids.compactMap({ id in
             NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier == id }
         }).first {
-            running.activate(options: .activateIgnoringOtherApps)
+            running.activate()
             return
         }
         if let appURL = appURL {
@@ -2897,10 +3154,10 @@ struct GitHubDetailView: View {
                             }
                         }
                     }
-                    .frame(maxHeight: 60)  // 3 rows × 20 pt; rest scrolls
+                    .frame(maxHeight: appState.showingIntegrationDetail ? 165 : 60)  // expanded: ~8 rows × 20 pt; compact: 3 rows × 20 pt
                     .mask(
                         Group {
-                            if totalItems > 3 {
+                            if totalItems > (appState.showingIntegrationDetail ? 7 : 3) {
                                 LinearGradient(
                                     stops: [
                                         .init(color: .black, location: 0),
@@ -3257,6 +3514,54 @@ private struct StatRow: View {
                 .monospacedDigit()
         }
         .frame(maxWidth: .infinity)
+    }
+}
+
+// MARK: - GitHub Empty Card View
+
+struct GitHubEmptyCardView: View {
+    @ObservedObject private var manager = GitHubAccountManager.shared
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(Color(hex: "#F4505E"))
+                    .frame(width: 7, height: 7)
+                Text("GitHub")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(Color(hex: "#F5F6F8"))
+            }
+            .padding(.top, 6)
+            .padding(.leading, 108)
+            .padding(.trailing, 36)
+
+            VStack(alignment: .leading, spacing: 4) {
+                if let active = manager.activeAccount {
+                    Text(String(format: "Connected CLI account: @%@", active.username))
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(Color(hex: "#C5C8CD"))
+                    if manager.accounts.count > 1 {
+                        Text(String(format: "%d accounts available in gh auth switch", manager.accounts.count))
+                            .font(.system(size: 10))
+                            .foregroundColor(Color(hex: "#6B7079"))
+                    }
+                } else {
+                    Text("No GitHub CLI accounts detected.")
+                        .font(.system(size: 11))
+                        .foregroundColor(Color(hex: "#8E939C"))
+                    Text("Run 'gh auth login' in terminal to add accounts.")
+                        .font(.system(size: 10))
+                        .foregroundColor(Color(hex: "#6B7079"))
+                }
+            }
+            .padding(.top, 6)
+            .padding(.leading, 108)
+            .padding(.trailing, 12)
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .padding(.top, 4)
+        .clipped()
     }
 }
 
@@ -3689,6 +3994,391 @@ struct NotionCardView: View {
     }
 }
 
+// MARK: - Hugging Face Card Views
+
+enum HuggingFaceDetailSection: String, CaseIterable {
+    case models
+    case datasets
+    case spaces
+}
+
+struct HuggingFacePulseCardView: View {
+    let user: HuggingFaceUser
+    let models: [HuggingFaceModel]
+    let datasets: [HuggingFaceDataset]
+    let spaces: [HuggingFaceSpace]
+    let onTapSection: (HuggingFaceDetailSection) -> Void
+
+    private var totalDownloads: Int {
+        models.reduce(0) { $0 + $1.downloads } + datasets.reduce(0) { $0 + $1.downloads }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(Color(hex: "#FFD21E"))
+                    .frame(width: 7, height: 7)
+                Text("Hugging Face")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(Color(hex: "#F5F6F8"))
+                Text("@\(user.name)")
+                    .font(.system(size: 11))
+                    .foregroundColor(Color(hex: "#8E939C"))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                if user.isPro {
+                    Text("PRO")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundColor(Color.black)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(Color(hex: "#FFD21E"))
+                        .clipShape(Capsule())
+                }
+                Spacer(minLength: 2)
+                if totalDownloads > 0 {
+                    HStack(spacing: 3) {
+                        Image(systemName: "arrow.down")
+                            .font(.system(size: 9, weight: .medium))
+                        Text(formatCount(totalDownloads))
+                            .font(.system(size: 11, weight: .medium))
+                            .monospacedDigit()
+                    }
+                    .foregroundColor(Color(hex: "#8E939C"))
+                }
+            }
+            .padding(.top, 6)
+            .padding(.leading, 108)
+            .padding(.trailing, 12)
+
+            // Stat rows
+            VStack(alignment: .leading, spacing: 4) {
+                // Models
+                let modelDownloads = models.reduce(0) { $0 + $1.downloads }
+                let modelVal: String = modelDownloads > 0 ? "\(models.count) · \(formatCount(modelDownloads)) dl" : "\(models.count)"
+                GitHubStatRow(
+                    icon: "shippingbox.fill",
+                    iconColor: "#FFD21E",
+                    label: "Models",
+                    value: modelVal
+                ) { onTapSection(.models) }
+
+                // Datasets
+                let datasetDownloads = datasets.reduce(0) { $0 + $1.downloads }
+                let datasetVal: String = datasetDownloads > 0 ? "\(datasets.count) · \(formatCount(datasetDownloads)) dl" : "\(datasets.count)"
+                GitHubStatRow(
+                    icon: "cylinder.split.1x2.fill",
+                    iconColor: "#38BDF8",
+                    label: "Datasets",
+                    value: datasetVal
+                ) { onTapSection(.datasets) }
+
+                // Spaces
+                let runningSpaces = spaces.filter { $0.stage?.uppercased() == "RUNNING" }.count
+                let spacesColor: String = runningSpaces > 0 ? "#22C55E" : (spaces.isEmpty ? "#6B7079" : "#F5A524")
+                let spacesVal: String = spaces.isEmpty ? "0" : (runningSpaces > 0 ? "\(runningSpaces) running" : "\(spaces.count)")
+                GitHubStatRow(
+                    icon: "sparkles",
+                    iconColor: spacesColor,
+                    label: "Spaces",
+                    value: spacesVal
+                ) { onTapSection(.spaces) }
+            }
+            .padding(.top, 6)
+            .padding(.leading, 108)
+            .padding(.trailing, 12)
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .padding(.top, 4)
+        .clipped()
+    }
+
+    private func formatCount(_ n: Int) -> String {
+        if n >= 1000000 { return String(format: "%.1fM", Double(n) / 1000000) }
+        if n >= 1000 { return String(format: "%.1fk", Double(n) / 1000) }
+        return "\(n)"
+    }
+}
+
+struct HuggingFaceDetailView: View {
+    let section: HuggingFaceDetailSection
+    let user: HuggingFaceUser
+    let models: [HuggingFaceModel]
+    let datasets: [HuggingFaceDataset]
+    let spaces: [HuggingFaceSpace]
+    let onBack: () -> Void
+    @ObservedObject private var appState = AppState.shared
+
+    private var title: String {
+        switch section {
+        case .models:   return "Models"
+        case .datasets: return "Datasets"
+        case .spaces:   return "Spaces"
+        }
+    }
+
+    private var sectionURL: URL? {
+        switch section {
+        case .models:   return URL(string: "https://huggingface.co/\(user.name)")
+        case .datasets: return URL(string: "https://huggingface.co/datasets?author=\(user.name)")
+        case .spaces:   return URL(string: "https://huggingface.co/spaces?author=\(user.name)")
+        }
+    }
+
+    private var totalItems: Int {
+        switch section {
+        case .models:   return models.count
+        case .datasets: return datasets.count
+        case .spaces:   return spaces.count
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header
+            HStack(spacing: 6) {
+                Button(action: onBack) {
+                    HStack(spacing: 3) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 8, weight: .medium))
+                        Text(title)
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    .foregroundColor(Color(hex: "#F5F6F8"))
+                }
+                .buttonStyle(.plain)
+
+                Spacer(minLength: 2)
+
+                if let url = sectionURL {
+                    Button(action: { NSWorkspace.shared.open(url) }) {
+                        Image(systemName: "arrow.up.right")
+                            .font(.system(size: 8, weight: .medium))
+                            .foregroundColor(Color(hex: "#5F646D"))
+                            .frame(width: 16, height: 16)
+                            .background(Color.white.opacity(0.07))
+                            .clipShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.top, 6)
+            .padding(.leading, 108)
+            .padding(.trailing, 12)
+
+            // Content List
+            if totalItems == 0 {
+                Text("Nothing here")
+                    .font(.system(size: 10.5))
+                    .foregroundColor(Color(hex: "#6B7079"))
+                    .padding(.top, 8)
+                    .padding(.leading, 108)
+            } else {
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        switch section {
+                        case .models:
+                            ForEach(models) { m in
+                                HuggingFaceItemRow(
+                                    name: m.repoName,
+                                    subtitle: m.pipelineTag,
+                                    isPrivate: m.isPrivate,
+                                    downloads: m.downloads,
+                                    likes: m.likes,
+                                    url: m.url
+                                )
+                            }
+                        case .datasets:
+                            ForEach(datasets) { d in
+                                HuggingFaceItemRow(
+                                    name: d.repoName,
+                                    subtitle: nil,
+                                    isPrivate: d.isPrivate,
+                                    downloads: d.downloads,
+                                    likes: d.likes,
+                                    url: d.url
+                                )
+                            }
+                        case .spaces:
+                            ForEach(spaces) { s in
+                                HuggingFaceSpaceRow(space: s)
+                            }
+                        }
+                    }
+                }
+                .frame(maxHeight: appState.showingIntegrationDetail ? 165 : 60)
+                .mask(
+                    Group {
+                        if totalItems > (appState.showingIntegrationDetail ? 7 : 3) {
+                            LinearGradient(
+                                stops: [
+                                    .init(color: .black, location: 0),
+                                    .init(color: .black, location: 0.8),
+                                    .init(color: .clear,  location: 1.0)
+                                ],
+                                startPoint: .top, endPoint: .bottom
+                            )
+                        } else {
+                            Color.black
+                        }
+                    }
+                )
+                .padding(.top, 4)
+                .padding(.leading, 108)
+                .padding(.trailing, 8)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .padding(.top, 4)
+        .clipped()
+        .onAppear {
+            HuggingFacePoller.shared.refreshIfStale()
+        }
+        .onExitCommand { onBack() }
+    }
+}
+
+private struct HuggingFaceItemRow: View {
+    let name: String
+    let subtitle: String?
+    let isPrivate: Bool
+    let downloads: Int
+    let likes: Int
+    let url: String
+
+    var body: some View {
+        Button(action: {
+            if let u = URL(string: url) { NSWorkspace.shared.open(u) }
+        }) {
+            HStack(spacing: 5) {
+                if isPrivate {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 8))
+                        .foregroundColor(Color(hex: "#F5A524"))
+                }
+                Text(name)
+                    .font(.system(size: 11))
+                    .foregroundColor(Color(hex: "#C5C8CD"))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                if let sub = subtitle, !sub.isEmpty {
+                    Text(sub)
+                        .font(.system(size: 9.5))
+                        .foregroundColor(Color(hex: "#6B7079"))
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 4)
+                if downloads > 0 {
+                    HStack(spacing: 2) {
+                        Image(systemName: "arrow.down")
+                            .font(.system(size: 8))
+                        Text(formatCount(downloads))
+                            .font(.system(size: 9.5))
+                            .monospacedDigit()
+                    }
+                    .foregroundColor(Color(hex: "#8E939C"))
+                }
+                if likes > 0 {
+                    HStack(spacing: 2) {
+                        Image(systemName: "heart.fill")
+                            .font(.system(size: 7))
+                        Text("\(likes)")
+                            .font(.system(size: 9.5))
+                            .monospacedDigit()
+                    }
+                    .foregroundColor(Color(hex: "#F472B6"))
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(height: 20)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func formatCount(_ n: Int) -> String {
+        if n >= 1000000 { return String(format: "%.1fM", Double(n) / 1000000) }
+        if n >= 1000 { return String(format: "%.1fk", Double(n) / 1000) }
+        return "\(n)"
+    }
+}
+
+private struct HuggingFaceSpaceRow: View {
+    let space: HuggingFaceSpace
+
+    private var stageColor: Color {
+        switch space.stage?.uppercased() {
+        case "RUNNING": return Color(hex: "#22C55E")
+        case "BUILDING": return Color(hex: "#F5A524")
+        case "APP_ERROR": return Color(hex: "#F4505E")
+        default: return Color(hex: "#6B7079")
+        }
+    }
+
+    var body: some View {
+        Button(action: {
+            if let u = URL(string: space.url) { NSWorkspace.shared.open(u) }
+        }) {
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(stageColor)
+                    .frame(width: 5, height: 5)
+                if space.isPrivate {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 8))
+                        .foregroundColor(Color(hex: "#F5A524"))
+                }
+                Text(space.repoName)
+                    .font(.system(size: 11))
+                    .foregroundColor(Color(hex: "#C5C8CD"))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 4)
+                if let stage = space.stage {
+                    Text(stage.capitalized)
+                        .font(.system(size: 9.5))
+                        .foregroundColor(stageColor)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(height: 20)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct HuggingFaceEmptyCardView: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(Color(hex: "#FFD21E"))
+                    .frame(width: 7, height: 7)
+                Text("Hugging Face")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(Color(hex: "#F5F6F8"))
+                Text("Not connected")
+                    .font(.system(size: 11))
+                    .foregroundColor(Color(hex: "#8E939C"))
+            }
+            .padding(.top, 6)
+            .padding(.leading, 108)
+            .padding(.trailing, 12)
+
+            Text("Add an API token in Settings or log in with huggingface-cli")
+                .font(.system(size: 10.5))
+                .foregroundColor(Color(hex: "#6B7079"))
+                .padding(.top, 8)
+                .padding(.leading, 108)
+                .padding(.trailing, 12)
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .padding(.top, 4)
+        .clipped()
+    }
+}
+
 // MARK: - n8n Execution Detail View
 
 struct N8nDetailView: View {
@@ -4002,7 +4692,7 @@ struct AgentPillsView: View {
     @State private var swapping = false
 
     private var others: [AgentTask] {
-        state.tasks.filter { $0.id != state.focusId }
+        state.tasks.filter { $0.id != state.focusId && $0.id != "integration_github" }
     }
 
     private var displayTasks: [AgentTask] {
@@ -5094,3 +5784,280 @@ extension Color {
         )
     }
 }
+
+// MARK: - Pomodoro & Stopwatch Island View (Native in-island layout)
+
+struct PresetChipStyle: ButtonStyle {
+    var selected: Bool
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 10, weight: selected ? .semibold : .regular))
+            .foregroundColor(selected ? Color(hex: "#F5F6F8") : Color(hex: "#8E939C"))
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3.5)
+            .background(selected ? Color.white.opacity(0.14) : Color.white.opacity(0.05))
+            .clipShape(Capsule())
+            .scaleEffect(configuration.isPressed ? 0.95 : 1.0)
+    }
+}
+
+struct PomodoroIslandView: View {
+    @ObservedObject var state: AppState
+    @ObservedObject private var manager = PomodoroManager.shared
+    @FocusState private var isInputFocused: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            leftTimerCard
+            rightConfigCard
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var leftTimerCard: some View {
+        ZStack(alignment: .topLeading) {
+            CardBackground(wash: nil)
+
+            VStack(alignment: .leading, spacing: 0) {
+                // Header row (clears Mochi placed at botX: 68)
+                HStack(spacing: 6) {
+                    Image(systemName: manager.isActive ? "timer" : "stopwatch")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(Color(hex: "#8E939C"))
+                    Text(manager.isStopwatchConfigured && !manager.isActive ? "Stopwatch" : "Focus & Timer")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(Color(hex: "#F5F6F8"))
+
+                    Spacer(minLength: 4)
+
+                    statusPill
+                }
+                .padding(.top, 6)
+                .padding(.leading, 108)
+                .padding(.trailing, 14)
+
+                // Timer display
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(manager.displayTime)
+                        .font(.system(size: 24, weight: .bold, design: .monospaced))
+                        .foregroundColor(Color(hex: "#F5F6F8"))
+
+                    Text(manager.modeTitleSubtitle)
+                        .font(.system(size: 9.5))
+                        .foregroundColor(Color(hex: "#8E939C"))
+                        .lineLimit(1)
+                }
+                .padding(.top, 4)
+                .padding(.leading, 108)
+                .padding(.trailing, 14)
+
+                Spacer(minLength: 2)
+
+                // Control actions
+                actionButtonsRow
+                    .padding(.bottom, 8)
+                    .padding(.leading, 108)
+                    .padding(.trailing, 14)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+        .frame(width: 322)
+    }
+
+    private var statusPill: some View {
+        Text(manager.isActive ? (manager.state == .paused ? "PAUSED" : "RUNNING") : "READY")
+            .font(.system(size: 8, weight: .bold))
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(
+                manager.isActive
+                    ? (manager.state == .paused ? Color(hex: "#F59E0B").opacity(0.2) : Color(hex: "#10B981").opacity(0.2))
+                    : Color.white.opacity(0.08)
+            )
+            .foregroundColor(
+                manager.isActive
+                    ? (manager.state == .paused ? Color(hex: "#F59E0B") : Color(hex: "#10B981"))
+                    : Color(hex: "#8E939C")
+            )
+            .clipShape(Capsule())
+    }
+
+    @ViewBuilder
+    private var actionButtonsRow: some View {
+        HStack(spacing: 6) {
+            if !manager.isActive {
+                Button(action: {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                        manager.startConfiguredTimer()
+                    }
+                }) {
+                    HStack(spacing: 5) {
+                        Image(systemName: "play.fill")
+                            .font(.system(size: 9))
+                        Text(manager.isStopwatchConfigured ? "Start Stopwatch" : "Start Focus (\(manager.configuredMinutes)m)")
+                            .font(.system(size: 11, weight: .semibold))
+                    }
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 11)
+                    .padding(.vertical, 5)
+                    .background(manager.isStopwatchConfigured ? Color(hex: "#38BDF8") : Color(hex: "#FF5A4E"))
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            } else {
+                Button(action: {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                        manager.togglePause()
+                    }
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: manager.state == .paused ? "play.fill" : "pause.fill")
+                            .font(.system(size: 9))
+                        Text(manager.state == .paused ? "Resume" : "Pause")
+                            .font(.system(size: 10.5, weight: .semibold))
+                    }
+                    .foregroundColor(manager.state == .paused ? Color(hex: "#10B981") : Color(hex: "#F59E0B"))
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 4)
+                    .background(Color.white.opacity(0.08))
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+
+                if manager.isCountdown {
+                    Button(action: {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                            manager.addMinutes(5)
+                        }
+                    }) {
+                        Text("+5m")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(Color(hex: "#38BDF8"))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color.white.opacity(0.08))
+                            .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                Button(action: {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                        manager.reset()
+                    }
+                }) {
+                    HStack(spacing: 3) {
+                        Image(systemName: "arrow.counterclockwise")
+                            .font(.system(size: 8.5))
+                        Text("Reset")
+                            .font(.system(size: 10, weight: .medium))
+                    }
+                    .foregroundColor(Color(hex: "#8E939C"))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.white.opacity(0.05))
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private var rightConfigCard: some View {
+        CardBackground(wash: nil) {
+            VStack(alignment: .leading, spacing: 6) {
+                // Row 1: Duration input & steppers
+                HStack(spacing: 6) {
+                    Text("Duration")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(Color(hex: "#8E939C"))
+
+                    Spacer()
+
+                    Button(action: { manager.adjustMinutes(by: -5) }) {
+                        Image(systemName: "minus")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundColor(Color(hex: "#C5C8CD"))
+                            .frame(width: 18, height: 18)
+                            .background(Color.white.opacity(0.08))
+                            .clipShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+
+                    HStack(spacing: 2) {
+                        TextField("0", text: $manager.manualMinutesText)
+                            .font(.system(size: 11.5, weight: .bold, design: .monospaced))
+                            .foregroundColor(Color(hex: "#F5F6F8"))
+                            .multilineTextAlignment(.center)
+                            .frame(width: 32)
+                            .textFieldStyle(.plain)
+                            .focused($isInputFocused)
+                            .onSubmit {
+                                manager.startConfiguredTimer()
+                            }
+
+                        Text("min")
+                            .font(.system(size: 9.5))
+                            .foregroundColor(Color(hex: "#6B7079"))
+                    }
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(Color.black.opacity(0.4))
+                    .clipShape(RoundedRectangle(cornerRadius: 5))
+
+                    Button(action: { manager.adjustMinutes(by: 5) }) {
+                        Image(systemName: "plus")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundColor(Color(hex: "#C5C8CD"))
+                            .frame(width: 18, height: 18)
+                            .background(Color.white.opacity(0.08))
+                            .clipShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                // Row 2: Presets
+                HStack(spacing: 5) {
+                    Button("25m") { manager.setMinutes(25) }
+                        .buttonStyle(PresetChipStyle(selected: manager.manualMinutesText == "25"))
+
+                    Button("50m") { manager.setMinutes(50) }
+                        .buttonStyle(PresetChipStyle(selected: manager.manualMinutesText == "50"))
+
+                    Button("5m Break") { manager.setMinutes(5) }
+                        .buttonStyle(PresetChipStyle(selected: manager.manualMinutesText == "5"))
+
+                    Button("Stopwatch") { manager.setMinutes(0) }
+                        .buttonStyle(PresetChipStyle(selected: manager.isStopwatchConfigured))
+                }
+
+                Spacer(minLength: 0)
+
+                // Row 3: Hint & Completed sessions
+                HStack(spacing: 4) {
+                    if manager.isStopwatchConfigured {
+                        Text("No duration: acts as stopwatch")
+                            .font(.system(size: 9))
+                            .foregroundColor(Color(hex: "#38BDF8"))
+                    } else {
+                        Text("Focus countdown timer")
+                            .font(.system(size: 9))
+                            .foregroundColor(Color(hex: "#8E939C"))
+                    }
+
+                    Spacer()
+
+                    if manager.completedSessions > 0 {
+                        Text("\(manager.completedSessions) completed today")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundColor(Color(hex: "#10B981"))
+                    }
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+}
+

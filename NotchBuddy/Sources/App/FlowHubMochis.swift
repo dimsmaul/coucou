@@ -252,6 +252,8 @@ struct HubHeroTheme {
         case .pills:
             return .init(color: Color(hex: "#F5A524"), cast: [m("#F5A524", 44, 0.05), m("#3B9EFF", 44, 0.3), m("#34D399", 44, 0.55),
                                                                m("#E07950", 44, 0.8), m("#A78BFA", 44, 1)])
+        case .personas:
+            return .init(color: Color(hex: "#A78BFA"), cast: [m("#A78BFA", 56, 0.25, outfit: .crown), m("#F5F6F8", 48, 0.75, outfit: .sunglasses)])
         case .agents:
             return .init(color: Color(hex: "#3B9EFF"), cast: [m("#3B9EFF", 56, 0.1, state: .working, roams: false),
                                                                m("#E07950", 50, 0.5, state: .thinking, roams: false),

@@ -39,7 +39,8 @@ enum ApprovalQueueTests {
         let s1 = entry(1, session: "s1", tool: "Bash", key: "{\"command\":\"ls\"}")
         let s2 = entry(2, session: "s2", tool: "Bash", key: "{\"command\":\"ls\"}")
         let cur = entry(3, session: "s1", pill: "agent_cursor", tool: "Bash", key: "{\"command\":\"ls\"}")
-        for e in [s1, s2, cur] { _ = m.enqueue(e) }
+        let cod = entry(4, session: "s3", pill: "agent_vscodium", tool: "Bash", key: "{\"command\":\"npm test\"}")
+        for e in [s1, s2, cur, cod] { _ = m.enqueue(e) }
         let pt = m.resolved(byEvent: "PostToolUse", sessionId: "s1", pillId: "integration_claude",
                             tool: "Bash", inputKey: "{\"command\":\"ls\"}")
         precondition(pt == [s1])
@@ -51,6 +52,8 @@ enum ApprovalQueueTests {
                                 tool: "", inputKey: "") == [s2])
         precondition(m.resolved(byEvent: "Stop", sessionId: "s1", pillId: "agent_cursor",
                                 tool: "", inputKey: "") == [cur])
+        precondition(m.resolved(byEvent: "Stop", sessionId: "s3", pillId: "agent_vscodium",
+                                tool: "", inputKey: "") == [cod])
         precondition(m.resolved(byEvent: "Stop", sessionId: "other", pillId: "integration_claude",
                                 tool: "", inputKey: "").isEmpty)
         precondition(m.resolved(byEvent: "PreToolUse", sessionId: "s1", pillId: "integration_claude",
@@ -58,7 +61,7 @@ enum ApprovalQueueTests {
 
         // Mixed sources and per-pill lookup
         precondition(m.hasMixedSources)
-        precondition(m.hasEntries(forPill: "agent_cursor") && !m.hasEntries(forPill: "agent_codex"))
+        precondition(m.hasEntries(forPill: "agent_cursor") && m.hasEntries(forPill: "agent_vscodium") && !m.hasEntries(forPill: "agent_codex"))
         var same = ApprovalQueue()
         _ = same.enqueue(entry(1)); _ = same.enqueue(entry(2, tool: "Edit"))
         precondition(!same.hasMixedSources)
