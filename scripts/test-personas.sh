@@ -9,6 +9,7 @@ swiftc -module-cache-path /tmp/swift-cache \
     tests/PersonaTestStubs.swift \
     NotchBuddy/Sources/CoucouKit/IslandScreenGeometry.swift \
     NotchBuddy/Sources/CoucouKit/IslandTypes.swift \
+    NotchBuddy/Sources/CoucouKit/ColorHex.swift \
     NotchBuddy/Sources/CoucouKit/MochiWardrobe.swift \
     NotchBuddy/Sources/CoucouKit/MochiPersona.swift \
     NotchBuddy/Sources/App/MCPClient.swift \

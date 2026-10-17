@@ -38,9 +38,20 @@ final class PersonaStore: ObservableObject {
 
     @Published private(set) var personas: [MochiPersona] = []
     @Published private(set) var activePersonaId: String = MochiPersona.standard.id
+    @Published private(set) var activePersona: MochiPersona = MochiPersona.standard
+    @Published private(set) var activeBodyColor: CGColor? = nil
+    @Published private(set) var activeEyeShape: EyeShape? = nil
 
-    var activePersona: MochiPersona {
-        personas.first(where: { $0.id == activePersonaId }) ?? personas.first ?? MochiPersona.standard
+    private func updateCachedActivePersona() {
+        let p = personas.first(where: { $0.id == activePersonaId }) ?? personas.first ?? MochiPersona.standard
+        activePersona = p
+        if p.id == MochiPersona.standard.id && p.bodyColorHex.caseInsensitiveCompare("#EDEDEF") == .orderedSame {
+            activeBodyColor = nil
+            activeEyeShape = nil
+        } else {
+            activeBodyColor = cgColorFromHex(p.bodyColorHex)
+            activeEyeShape = p.eyeShape
+        }
     }
 
     private init() {
@@ -88,6 +99,8 @@ final class PersonaStore: ObservableObject {
             saveActivePersonaToDisk()
         }
 
+        updateCachedActivePersona()
+
         // Warm up MCP client for active persona and notify listeners
         let persona = activePersona
         Task {
@@ -118,6 +131,7 @@ final class PersonaStore: ObservableObject {
     func selectPersona(id: String) {
         guard personas.contains(where: { $0.id == id }) else { return }
         activePersonaId = id
+        updateCachedActivePersona()
         saveActivePersonaToDisk()
 
         let persona = activePersona
@@ -130,6 +144,7 @@ final class PersonaStore: ObservableObject {
 
     func addPersona(_ persona: MochiPersona) {
         personas.append(persona)
+        updateCachedActivePersona()
         save()
         NotificationCenter.default.post(name: .personaStoreDidChange, object: activePersona)
     }
@@ -138,6 +153,7 @@ final class PersonaStore: ObservableObject {
         if let index = personas.firstIndex(where: { $0.id == updated.id }) {
             let old = personas[index]
             personas[index] = updated
+            updateCachedActivePersona()
             save()
             if activePersonaId == updated.id {
                 let persona = activePersona
@@ -159,6 +175,7 @@ final class PersonaStore: ObservableObject {
         if activePersonaId == id {
             activePersonaId = personas.first?.id ?? MochiPersona.standard.id
         }
+        updateCachedActivePersona()
         save()
         let active = activePersona
         Task {

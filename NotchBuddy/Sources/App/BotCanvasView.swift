@@ -43,22 +43,22 @@ struct BotCanvasView: View {
                 ? CodexPlanGauge.color(state.codexPlanUsage)
                 : ClaudePlanGauge.color(for: state.claudePlanUsage.flatMap { ClaudePlanGauge.dominantPct($0) })
             engine.bodyColor = cgColorFromHex(hex)
-        } else if let personaColor = state.activePersonaColor, (isFocusMain || state.mode != .expanded) {
-            engine.bodyColor = cgColorFromHex(personaColor)
+        } else if let personaColor = PersonaStore.shared.activeBodyColor, (isFocusMain || state.mode != .expanded) {
+            engine.bodyColor = personaColor
         } else if state.focusTask?.isIntegration == true && !isFocusMain {
             engine.bodyColor = cgColorFromHex(state.focusTask!.color)
-        } else if let personaColor = state.activePersonaColor {
-            engine.bodyColor = cgColorFromHex(personaColor)
+        } else if let personaColor = PersonaStore.shared.activeBodyColor {
+            engine.bodyColor = personaColor
         } else {
             engine.bodyColor = nil
         }
         #else
-        if let personaColor = state.activePersonaColor, (isFocusMain || state.mode != .expanded) {
-            engine.bodyColor = cgColorFromHex(personaColor)
+        if let personaColor = PersonaStore.shared.activeBodyColor, (isFocusMain || state.mode != .expanded) {
+            engine.bodyColor = personaColor
         } else if state.focusTask?.isIntegration == true && !isFocusMain {
             engine.bodyColor = cgColorFromHex(state.focusTask!.color)
-        } else if let personaColor = state.activePersonaColor {
-            engine.bodyColor = cgColorFromHex(personaColor)
+        } else if let personaColor = PersonaStore.shared.activeBodyColor {
+            engine.bodyColor = personaColor
         } else {
             engine.bodyColor = nil
         }
@@ -87,13 +87,8 @@ struct BotCanvasView: View {
         engine.setOutfit(showOutfit ? state.resolvedOutfit : .none,
                          animated: state.view != .wardrobe)
 
-        let activePersona = PersonaStore.shared.activePersona
         if isFocusMain || state.mode != .expanded {
-            if activePersona.id != MochiPersona.standard.id {
-                engine.permanentEye = activePersona.eyeShape
-            } else {
-                engine.permanentEye = nil
-            }
+            engine.permanentEye = PersonaStore.shared.activeEyeShape
         }
 
         #if !APPSTORE

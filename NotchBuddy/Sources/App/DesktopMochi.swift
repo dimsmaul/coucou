@@ -40,17 +40,8 @@ struct DesktopBotView: View {
 
                 // Desktop Mochi is always the "main" Mochi — always dressed
                 engine.setOutfit(appState.resolvedOutfit, animated: true)
-                if let personaColor = appState.activePersonaColor {
-                    engine.bodyColor = cgColorFromHex(personaColor)
-                } else {
-                    engine.bodyColor = nil
-                }
-                let activePersona = PersonaStore.shared.activePersona
-                if activePersona.id != MochiPersona.standard.id {
-                    engine.permanentEye = activePersona.eyeShape
-                } else {
-                    engine.permanentEye = nil
-                }
+                engine.bodyColor = PersonaStore.shared.activeBodyColor
+                engine.permanentEye = PersonaStore.shared.activeEyeShape
 
                 // Dance when music plays (same rules as compact mode)
                 let dancing: Bool = {

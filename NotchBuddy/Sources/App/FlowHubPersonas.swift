@@ -9,9 +9,10 @@ struct ExpressiveMochiPreview: View {
     var size: CGFloat = 64
 
     @StateObject private var engine = BotEngine()
+    @State private var isVisible: Bool = true
 
     var body: some View {
-        TimelineView(.animation(paused: false)) { timeline in
+        TimelineView(.animation(paused: !isVisible)) { timeline in
             Canvas { context, sz in
                 _ = timeline.date
                 MochiFrameClock.advance(engine)
@@ -22,7 +23,11 @@ struct ExpressiveMochiPreview: View {
         }
         .frame(width: size, height: size)
         .onAppear {
+            isVisible = true
             applyPersona(persona, animated: false)
+        }
+        .onDisappear {
+            isVisible = false
         }
         .onChange(of: persona.id) { _, _ in
             applyPersona(persona, animated: false)

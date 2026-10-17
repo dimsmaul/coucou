@@ -181,7 +181,7 @@ final class DiscordBotListener: ObservableObject {
     @Published private(set) var isListening: Bool = false
     @Published private(set) var lastStatus: String = "Idle"
 
-    private var pollTimer: Timer?
+    private var pollingTask: Task<Void, Never>?
     private var lastSeenMessageId: String?
     private var currentConfig: DiscordIntegrationConfig?
     private var currentPersona: MochiPersona?
@@ -216,8 +216,8 @@ final class DiscordBotListener: ObservableObject {
     }
 
     func stop() {
-        pollTimer?.invalidate()
-        pollTimer = nil
+        pollingTask?.cancel()
+        pollingTask = nil
         isListening = false
         lastStatus = "Stopped"
     }
@@ -227,9 +227,11 @@ final class DiscordBotListener: ObservableObject {
         isListening = true
         lastStatus = "Listening"
 
-        pollTimer?.invalidate()
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in
+        pollingTask?.cancel()
+        pollingTask = Task.detached(priority: .utility) { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 2_500_000_000)
+                guard !Task.isCancelled else { break }
                 await self?.pollChannel()
             }
         }
@@ -314,7 +316,12 @@ final class DiscordBotListener: ObservableObject {
                     guard !cleanPrompt.isEmpty else { continue }
 
                     let authorName = (msg["author"] as? [String: Any])?["username"] as? String ?? "User"
-                    await processDiscordCommand(prompt: cleanPrompt, author: authorName, channelId: channelId, token: token, persona: persona)
+                    await MainActor.run { [weak self] in
+                        guard let self = self else { return }
+                        Task { @MainActor in
+                            await self.processDiscordCommand(prompt: cleanPrompt, author: authorName, channelId: channelId, token: token, persona: persona)
+                        }
+                    }
                     break
                 }
             }
@@ -323,6 +330,7 @@ final class DiscordBotListener: ObservableObject {
         }
     }
 
+    @MainActor
     private func processDiscordCommand(prompt: String, author: String, channelId: String, token: String, persona: MochiPersona) async {
         isProcessing = true
         defer { isProcessing = false }
