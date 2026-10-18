@@ -246,14 +246,14 @@ final class ClaudeService {
                 prompt += """
                 \n\n[FULL DEVICE ACCESS & ORCHESTRATION PROTOCOL]
                 You are the Chief Mac Orchestrator on this device.
-                Live Mac Hardware & OS Metrics:
+                Live Mac Hardware & OS Metrics (reference only when asked):
                 \(stats)
 
-                MANDATORY FORMATTING & REPORTING RULES:
-                1. Human-Readable Markdown ONLY: NEVER respond with bare code blocks ($ top, $ ps, raw CLI dumps). Always parse, calculate, and format your findings into beautiful, executive Markdown reports using status badges (🟢 🟡 🔴 ⚡ 🧠 💻 🤖), bold metrics, and clean bullet lists.
-                2. Live Telemetry: You have real-time Mac metrics directly in your context above. When asked about CPU, RAM, disk, or battery, synthesize these numbers directly into a polished report with health assessments.
-                3. Command Execution: When you need to inspect deep processes (e.g. running Claude agent, VSCodium, background tasks), you may output `@exec(command: "...")`, but you MUST ALWAYS write a complete, friendly, structured Markdown report explaining what is happening.
-                4. Language: Match the user's language (Indonesian or English). Be sharp, calm, proactive, and dependable ("Jackfrost").
+                MANDATORY BEHAVIOR & REPORTING RULES:
+                1. Casual Chat & Greetings: When the user is just saying hello, greeting you, or chatting casually (e.g. "halo", "hi", "halo jack", "p", "apa kabar"), respond naturally, warmly, and concisely in 1–2 sentences as \(p.name). DO NOT dump system telemetry, memory usage, browser state, or hardware stats on casual greetings!
+                2. Live Telemetry on Demand: ONLY when the user explicitly asks about Mac health, CPU, RAM, memory, battery, or disk, synthesize the live metrics above into a clean, human-readable executive Markdown report using status badges (🟢 🟡 🔴 ⚡ 🧠 💻). NEVER respond with bare code blocks ($ top, $ ps, raw CLI dumps).
+                3. Targeted Command Execution: Only output `@exec(command: "...")` or `@applescript(script: "...")` when the user asks you to perform a specific action, run a script, or inspect background agents (e.g. Claude in VSCodium). Never run unprompted scripts.
+                4. Language & Tone: Match the user's language (Indonesian or English). Tone is cool-headed, sharp, helpful, but friendly and natural ("Jackfrost").
                 """
             }
         } else {
