@@ -186,6 +186,7 @@ final class DiscordBotListener: ObservableObject {
     private var currentConfig: DiscordIntegrationConfig?
     private var currentPersona: MochiPersona?
     private var isProcessing: Bool = false
+    private var consecutiveEmptyPolls: Int = 0
 
     private init() {}
 
@@ -212,6 +213,7 @@ final class DiscordBotListener: ObservableObject {
             return
         }
 
+        consecutiveEmptyPolls = 0
         startListening()
     }
 
@@ -220,6 +222,20 @@ final class DiscordBotListener: ObservableObject {
         pollingTask = nil
         isListening = false
         lastStatus = "Stopped"
+        consecutiveEmptyPolls = 0
+    }
+
+    private func currentPollDelay() -> UInt64 {
+        // Fast polling (2.0s) during recent activity (<1 minute)
+        // Balanced polling (4.0s) for 1–4 minutes of inactivity
+        // Power-save polling (6.0s) for prolonged silence (>4 minutes)
+        if consecutiveEmptyPolls < 30 {
+            return 2_000_000_000
+        } else if consecutiveEmptyPolls < 90 {
+            return 4_000_000_000
+        } else {
+            return 6_000_000_000
+        }
     }
 
     private func startListening() {
@@ -230,7 +246,8 @@ final class DiscordBotListener: ObservableObject {
         pollingTask?.cancel()
         pollingTask = Task.detached(priority: .utility) { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 2_500_000_000)
+                let delay = await self?.currentPollDelay() ?? 2_500_000_000
+                try? await Task.sleep(nanoseconds: delay)
                 guard !Task.isCancelled else { break }
                 await self?.pollChannel()
             }
@@ -267,6 +284,7 @@ final class DiscordBotListener: ObservableObject {
                 if let newest = jsonArray.first, let newestId = newest["id"] as? String {
                     lastSeenMessageId = newestId
                 }
+                consecutiveEmptyPolls = 0
                 return
             }
 
@@ -279,6 +297,12 @@ final class DiscordBotListener: ObservableObject {
                 }
                 return id > last
             }.reversed()
+
+            if newMessages.isEmpty {
+                consecutiveEmptyPolls += 1
+            } else {
+                consecutiveEmptyPolls = 0
+            }
 
             for msg in newMessages {
                 guard let msgId = msg["id"] as? String else { continue }
@@ -316,17 +340,13 @@ final class DiscordBotListener: ObservableObject {
                     guard !cleanPrompt.isEmpty else { continue }
 
                     let authorName = (msg["author"] as? [String: Any])?["username"] as? String ?? "User"
-                    await MainActor.run { [weak self] in
-                        guard let self = self else { return }
-                        Task { @MainActor in
-                            await self.processDiscordCommand(prompt: cleanPrompt, author: authorName, channelId: channelId, token: token, persona: persona)
-                        }
-                    }
+                    await processDiscordCommand(prompt: cleanPrompt, author: authorName, channelId: channelId, token: token, persona: persona)
                     break
                 }
             }
         } catch {
             // Transient network error
+            consecutiveEmptyPolls += 1
         }
     }
 

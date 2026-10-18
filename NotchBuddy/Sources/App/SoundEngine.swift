@@ -46,23 +46,33 @@ final class SoundEngine {
     /// Names of the built-in sounds currently replaced by a custom file.
     private(set) var customized: [String] = []
 
+    /// Core sounds pre-warmed on launch; other sounds load lazily on-demand to save ~25 MB RAM.
+    static let coreSounds = ["pop", "peek", "hover", "open", "close"]
+
     private func preload() {
-        var pools: [String: [AVAudioPlayer]] = [:]
-        var custom: [String] = []
-        for name in Self.soundNames {
-            let own = Self.customURL(for: name)
-            // A custom file that can't be decoded falls back to the built-in sound.
-            var pool = own.map { makePool($0) } ?? []
-            if pool.isEmpty {
-                guard let url = Bundle.main.url(forResource: name, withExtension: "wav", subdirectory: "sounds") else { continue }
-                pool = makePool(url)
-            } else {
-                custom.append(name)
-            }
-            if !pool.isEmpty { pools[name] = pool }
+        players.removeAll()
+        customized.removeAll()
+        for name in Self.coreSounds {
+            _ = getPool(for: name)
         }
-        players = pools
-        customized = custom
+    }
+
+    private func getPool(for name: String) -> [AVAudioPlayer]? {
+        if let existing = players[name] {
+            return existing
+        }
+        let own = Self.customURL(for: name)
+        var pool = own.map { makePool($0) } ?? []
+        if pool.isEmpty {
+            guard let url = Bundle.main.url(forResource: name, withExtension: "wav", subdirectory: "sounds") else { return nil }
+            pool = makePool(url)
+        } else if !customized.contains(name) {
+            customized.append(name)
+        }
+        if !pool.isEmpty {
+            players[name] = pool
+        }
+        return pool
     }
 
     private func makePool(_ url: URL) -> [AVAudioPlayer] {
@@ -104,7 +114,7 @@ final class SoundEngine {
 
     func play(_ name: String) {
         guard enabled && AppState.shared.soundEnabled else { return }
-        guard let pool = players[name] else { return }
+        guard let pool = getPool(for: name), !pool.isEmpty else { return }
         // Find a player that is not currently playing
         let player = pool.first { !$0.isPlaying } ?? pool[0]
         player.currentTime = 0

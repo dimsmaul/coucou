@@ -19,8 +19,33 @@ public enum DeviceOrchestrator {
         public let diskTotalGB: Double
     }
 
-    /// Fetches live system hardware and OS metrics in real-time
+    // MARK: - Telemetry TTL Caching
+    private static let cacheLock = NSLock()
+    nonisolated(unsafe) private static var cachedSnapshot: SystemSnapshot?
+    nonisolated(unsafe) private static var lastSnapshotTime: TimeInterval = 0
+    private static let snapshotTTL: TimeInterval = 1.0
+
+    /// Fetches live system hardware and OS metrics (cached with 1.0s TTL to eliminate kernel trap overhead)
     public static func currentSnapshot() -> SystemSnapshot {
+        cacheLock.lock()
+        let now = ProcessInfo.processInfo.systemUptime
+        if let cached = cachedSnapshot, (now - lastSnapshotTime) < snapshotTTL {
+            cacheLock.unlock()
+            return cached
+        }
+        cacheLock.unlock()
+
+        let fresh = computeSnapshot()
+
+        cacheLock.lock()
+        cachedSnapshot = fresh
+        lastSnapshotTime = now
+        cacheLock.unlock()
+
+        return fresh
+    }
+
+    private static func computeSnapshot() -> SystemSnapshot {
         let host = Host.current().localizedName ?? "Mac"
         let os = ProcessInfo.processInfo.operatingSystemVersionString
 
