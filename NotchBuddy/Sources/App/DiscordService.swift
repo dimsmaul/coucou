@@ -382,8 +382,9 @@ final class DiscordBotListener: ObservableObject {
         if persona.deviceAccess.isEnabled {
             let execs = DeviceOrchestrator.parseExecCommands(from: finalResponse)
             let scripts = DeviceOrchestrator.parseAppleScripts(from: finalResponse)
+            let editorDirectives = DeviceOrchestrator.parseEditorDirectives(from: finalResponse)
 
-            // Remove raw @exec(...) and @applescript(...) directives from response
+            // Remove raw @exec(...), @applescript(...), and @editor(...) directives from response
             var cleanedText = finalResponse
             for cmd in execs {
                 cleanedText = cleanedText.replacingOccurrences(of: "@exec(command: \"\(cmd)\")", with: "")
@@ -392,6 +393,9 @@ final class DiscordBotListener: ObservableObject {
             for s in scripts {
                 cleanedText = cleanedText.replacingOccurrences(of: "@applescript(script: \"\(s)\")", with: "")
                 cleanedText = cleanedText.replacingOccurrences(of: "@applescript(\"\(s)\")", with: "")
+            }
+            if let edRegex = try? NSRegularExpression(pattern: #"@editor\([^)]+\)"#) {
+                cleanedText = edRegex.stringByReplacingMatches(in: cleanedText, options: [], range: NSRange(location: 0, length: (cleanedText as NSString).length), withTemplate: "")
             }
             cleanedText = cleanedText.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -408,15 +412,33 @@ final class DiscordBotListener: ObservableObject {
                     executionOutputs.append(res.output)
                 }
             }
+            for d in editorDirectives {
+                if d.action == "open" {
+                    if d.editor.lowercased() == "zed" {
+                        _ = ZedBridge.open(workspacePath: d.path)
+                    } else if d.editor.lowercased().contains("codium") {
+                        _ = VSCodiumBridge.open(workspacePath: d.path)
+                    }
+                } else if d.action == "openFile", let path = d.path {
+                    if d.editor.lowercased() == "zed" {
+                        _ = ZedBridge.openFile(path: path, line: d.line, column: d.column)
+                    } else if d.editor.lowercased().contains("codium") {
+                        _ = VSCodiumBridge.openFile(path: path, line: d.line, column: d.column)
+                    }
+                }
+            }
 
             if cleanedText.isEmpty {
                 let live = DeviceOrchestrator.liveSummary()
+                let editors = EditorInspector.inspectEditorsAndAgents().formattedReport
                 cleanedText = """
                 ### 🖥️ Mac Status Report
                 
                 \(live)
                 
-                > 💡 *Command executed successfully on Mac.*
+                \(editors)
+                
+                > 💡 *Action executed successfully on Mac.*
                 """
             }
             finalResponse = cleanedText

@@ -182,6 +182,11 @@ public enum DeviceOrchestrator {
         }
     }
 
+    /// Inspects open code editor windows (VSCodium, Zed, VS Code) and all AI agents running inside each workspace.
+    public static func inspectWorkspacesAndAgents() -> EditorInspectionSummary {
+        EditorInspector.inspectEditorsAndAgents()
+    }
+
     /// Parses `@exec(command: "...")` directives in persona response
     public static func parseExecCommands(from text: String) -> [String] {
         let pattern = #"@exec\((?:command:\s*)?\"([^\"]+)\"\)"#
@@ -204,5 +209,61 @@ public enum DeviceOrchestrator {
             guard m.numberOfRanges >= 2 else { return nil }
             return ns.substring(with: m.range(at: 1))
         }
+    }
+
+    public struct EditorActionDirective: Sendable {
+        public let action: String // "open", "openFile"
+        public let editor: String // "zed", "codium"
+        public let path: String?
+        public let line: Int?
+        public let column: Int?
+    }
+
+    /// Parses `@editor(action: "...", editor: "...", path: "...")` directives in persona response
+    public static func parseEditorDirectives(from text: String) -> [EditorActionDirective] {
+        let pattern = #"@editor\(([^)]+)\)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return [] }
+        let ns = text as NSString
+        let matches = regex.matches(in: text, options: [], range: NSRange(location: 0, length: ns.length))
+
+        var directives: [EditorActionDirective] = []
+        for m in matches {
+            guard m.numberOfRanges >= 2 else { continue }
+            let argsStr = ns.substring(with: m.range(at: 1))
+
+            var action = "open"
+            var editor = "zed"
+            var path: String? = nil
+            var line: Int? = nil
+            var column: Int? = nil
+
+            let actionRegex = try? NSRegularExpression(pattern: #"action:\s*\"([^\"]+)\""#)
+            if let actMatch = actionRegex?.firstMatch(in: argsStr, range: NSRange(location: 0, length: (argsStr as NSString).length)) {
+                action = (argsStr as NSString).substring(with: actMatch.range(at: 1))
+            }
+
+            let editorRegex = try? NSRegularExpression(pattern: #"editor:\s*\"([^\"]+)\""#)
+            if let edMatch = editorRegex?.firstMatch(in: argsStr, range: NSRange(location: 0, length: (argsStr as NSString).length)) {
+                editor = (argsStr as NSString).substring(with: edMatch.range(at: 1))
+            }
+
+            let pathRegex = try? NSRegularExpression(pattern: #"path:\s*\"([^\"]+)\""#)
+            if let pMatch = pathRegex?.firstMatch(in: argsStr, range: NSRange(location: 0, length: (argsStr as NSString).length)) {
+                path = (argsStr as NSString).substring(with: pMatch.range(at: 1))
+            }
+
+            let lineRegex = try? NSRegularExpression(pattern: #"line:\s*([0-9]+)"#)
+            if let lMatch = lineRegex?.firstMatch(in: argsStr, range: NSRange(location: 0, length: (argsStr as NSString).length)) {
+                line = Int((argsStr as NSString).substring(with: lMatch.range(at: 1)))
+            }
+
+            let colRegex = try? NSRegularExpression(pattern: #"column:\s*([0-9]+)"#)
+            if let cMatch = colRegex?.firstMatch(in: argsStr, range: NSRange(location: 0, length: (argsStr as NSString).length)) {
+                column = Int((argsStr as NSString).substring(with: cMatch.range(at: 1)))
+            }
+
+            directives.append(EditorActionDirective(action: action, editor: editor, path: path, line: line, column: column))
+        }
+        return directives
     }
 }

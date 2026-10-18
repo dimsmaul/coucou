@@ -68,6 +68,7 @@ final class HookServer: @unchecked Sendable {
         switch pill {
         case "agent_cursor":   return "Handled in Cursor."
         case "agent_vscodium": return "Handled in VSCodium."
+        case "agent_zed":      return "Handled in Zed."
         case "agent_codex":    return "Handled in Codex."
         case "agent_copilot":  return "Handled in Copilot CLI."
         case "agent_muse":     return "Handled in Muse Code."
@@ -82,6 +83,7 @@ final class HookServer: @unchecked Sendable {
         switch pill {
         case "agent_cursor":   return "Still waiting in Cursor."
         case "agent_vscodium": return "Still waiting in VSCodium."
+        case "agent_zed":      return "Still waiting in Zed."
         case "agent_codex":    return "Still waiting in Codex."
         case "agent_copilot": return "Still waiting in Copilot CLI."
         case "agent_muse":    return "Still waiting in Muse Code."
@@ -439,7 +441,12 @@ final class HookServer: @unchecked Sendable {
             (bundleId.lowercased().contains("codium") && !bundleId.lowercased().contains("vscode")) ||
             termProgram.lowercased() == "codium"
         )
-        let isVSCodeEditor = !isCursorEditor && !isVSCodiumEditor && (
+        let isZedEditor = !isCursorEditor && !isVSCodiumEditor && (
+            bundleId.lowercased() == "dev.zed.zed" ||
+            bundleId.lowercased() == "dev.zed.zed-preview" ||
+            termProgram.lowercased() == "zed"
+        )
+        let isVSCodeEditor = !isCursorEditor && !isVSCodiumEditor && !isZedEditor && (
             termProgram.lowercased().contains("vscode") ||
             bundleId.lowercased().contains("vscode"))
 
@@ -448,6 +455,7 @@ final class HookServer: @unchecked Sendable {
         // • other valid coucou_agent → external pill (fire-and-forget, no approval card)
         // • Cursor bundle ID → agent_cursor
         // • VSCodium bundle ID / codium → agent_vscodium
+        // • Zed bundle ID / zed → agent_zed
         // • VS Code → integration_claude
         // • a known terminal (Warp, Terminal, iTerm…) → integration_claude, host recorded on the task
         #if !APPSTORE
@@ -469,6 +477,9 @@ final class HookServer: @unchecked Sendable {
             isExternalAgent = false
         } else if isVSCodiumEditor {
             agentId = "agent_vscodium"
+            isExternalAgent = false
+        } else if isZedEditor {
+            agentId = "agent_zed"
             isExternalAgent = false
         } else if isVSCodeEditor {
             agentId = "integration_claude"
@@ -781,11 +792,16 @@ final class HookServer: @unchecked Sendable {
             (bundleId.lowercased().contains("codium") && !bundleId.lowercased().contains("vscode")) ||
             termProgram.lowercased() == "codium"
         )
-        let isVSCodeEditor = !isCursorEditor && !isVSCodiumEditor && (
+        let isZedEditor = !isCursorEditor && !isVSCodiumEditor && (
+            bundleId.lowercased() == "dev.zed.zed" ||
+            bundleId.lowercased() == "dev.zed.zed-preview" ||
+            termProgram.lowercased() == "zed"
+        )
+        let isVSCodeEditor = !isCursorEditor && !isVSCodiumEditor && !isZedEditor && (
             termProgram.lowercased().contains("vscode") ||
             bundleId.lowercased().contains("vscode"))
 
-        // Codex, Copilot CLI and Muse Code get the same approval card as Claude Code / Cursor / VSCodium.
+        // Codex, Copilot CLI and Muse Code get the same approval card as Claude Code / Cursor / VSCodium / Zed.
         // Other external agents (any other coucou_agent) answer immediately with "ask"
         // so the agent re-asks in its own terminal — they do not get a notch card.
         #if !APPSTORE
@@ -826,11 +842,13 @@ final class HookServer: @unchecked Sendable {
             pillId = "agent_cursor"
         } else if isVSCodiumEditor {
             pillId = "agent_vscodium"
+        } else if isZedEditor {
+            pillId = "agent_zed"
         } else {
             pillId = "integration_claude"
         }
         // Terminal sessions: only when turned on in Settings, else the terminal asks itself.
-        let terminalHost = isCursorEditor || isVSCodiumEditor || isVSCodeEditor ? nil
+        let terminalHost = isCursorEditor || isVSCodiumEditor || isZedEditor || isVSCodeEditor ? nil
             : ClaudeHost.terminal(termProgram: termProgram, bundleId: bundleId)
         let isTerminal = terminalHost != nil && ClaudeHost.terminalCardsEnabled
         guard isCodexRequest || isCopilotRequest || isMuseRequest || isHermesRequest || isCursorEditor || isVSCodiumEditor || isVSCodeEditor || isTerminal else {
@@ -972,7 +990,12 @@ final class HookServer: @unchecked Sendable {
             (bundleId.lowercased().contains("codium") && !bundleId.lowercased().contains("vscode")) ||
             termProgram.lowercased() == "codium"
         )
-        let isVSCodeEditor = !isCursorEditor && !isVSCodiumEditor && (
+        let isZedEditor = !isCursorEditor && !isVSCodiumEditor && (
+            bundleId.lowercased() == "dev.zed.zed" ||
+            bundleId.lowercased() == "dev.zed.zed-preview" ||
+            termProgram.lowercased() == "zed"
+        )
+        let isVSCodeEditor = !isCursorEditor && !isVSCodiumEditor && !isZedEditor && (
             termProgram.lowercased().contains("vscode") ||
             bundleId.lowercased().contains("vscode"))
         #if !APPSTORE
@@ -987,14 +1010,16 @@ final class HookServer: @unchecked Sendable {
             pillId = "agent_cursor"
         } else if isVSCodiumEditor {
             pillId = "agent_vscodium"
+        } else if isZedEditor {
+            pillId = "agent_zed"
         } else {
             pillId = "integration_claude"
         }
         // Terminal sessions: only when turned on in Settings, else the terminal asks itself.
-        let terminalHost = isCursorEditor || isVSCodiumEditor || isVSCodeEditor ? nil
+        let terminalHost = isCursorEditor || isVSCodiumEditor || isZedEditor || isVSCodeEditor ? nil
             : ClaudeHost.terminal(termProgram: termProgram, bundleId: bundleId)
         let isTerminal = terminalHost != nil && ClaudeHost.terminalCardsEnabled
-        guard isCodexRequest || isCursorEditor || isVSCodiumEditor || isVSCodeEditor || isTerminal else {
+        guard isCodexRequest || isCursorEditor || isVSCodiumEditor || isZedEditor || isVSCodeEditor || isTerminal else {
             Task.detached { [weak self] in
                 self?.sendLine(fd: fd, text: #"{"permissionDecision":"ask"}"#)
                 close(fd)

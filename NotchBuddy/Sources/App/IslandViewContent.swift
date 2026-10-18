@@ -291,6 +291,10 @@ struct OverviewView: View {
             #if !APPSTORE
             VSCodiumBridge.open()
             #endif
+        case "agent_zed":
+            #if !APPSTORE
+            ZedBridge.open()
+            #endif
         case "agent_codex":
             #if !APPSTORE
             if let url = NSWorkspace.shared.urlForApplication(
@@ -2022,7 +2026,7 @@ struct IntegrationCardView: View {
         switch task.id {
         // Cursor and VSCodium sessions are Claude Code running in the editor's integrated terminal,
         // so their pills are set up exactly when the Claude Code hooks are.
-        case "integration_claude", "agent_cursor", "agent_vscodium":
+        case "integration_claude", "agent_cursor", "agent_vscodium", "agent_zed":
             return HookServer.claudeHooksInstalled()
         case "agent_codex":
             #if !APPSTORE
@@ -2256,7 +2260,7 @@ struct IntegrationCardView: View {
         // nothing left to load — a session replaces this card, it never resolves here.
         let isHooks = task.id == "integration_claude" || task.id == "agent_gemini"
                    || task.id == "agent_antigravity"  || task.id == "agent_cursor"
-                   || task.id == "agent_vscodium"     || task.id == "agent_codex"
+                   || task.id == "agent_vscodium"     || task.id == "agent_zed"         || task.id == "agent_codex"
                    || task.id == "agent_copilot"      || task.id == "agent_muse"
                    || task.id == "agent_opencode"     || task.id == "agent_amp"
                    || task.id == "agent_hermes"
@@ -2492,6 +2496,13 @@ struct IntegrationCardView: View {
                             .foregroundColor(Color(hex: task.color).opacity(0.85))
                             .buttonStyle(.plain)
                         #endif
+                    } else if task.id == "agent_zed" {
+                        #if !APPSTORE
+                        Button("Open Zed") { ZedBridge.open() }
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(Color(hex: task.color).opacity(0.85))
+                            .buttonStyle(.plain)
+                        #endif
                     } else if task.id == "agent_codex" {
                         #if !APPSTORE
                         if let url = NSWorkspace.shared.urlForApplication(
@@ -2585,6 +2596,7 @@ struct IntegrationCardView: View {
                     if !isConfigured
                        && task.id != "agent_cursor"
                        && task.id != "agent_vscodium"
+                       && task.id != "agent_zed"
                        && task.id != "agent_codex"
                        && task.id != "integration_music"
                        && task.id != "integration_mail" {
@@ -4692,7 +4704,7 @@ struct AgentPillsView: View {
     @State private var swapping = false
 
     private var others: [AgentTask] {
-        state.tasks.filter { $0.id != state.focusId && $0.id != "integration_github" }
+        state.tasks.filter { $0.id != state.focusId }
     }
 
     private var displayTasks: [AgentTask] {

@@ -17,6 +17,8 @@ swiftc -module-cache-path /tmp/swift-cache \
     NotchBuddy/Sources/App/LocalChat.swift \
     NotchBuddy/Sources/App/AntigravityBridge.swift \
     NotchBuddy/Sources/App/ZedBridge.swift \
+    NotchBuddy/Sources/App/VSCodiumBridge.swift \
+    NotchBuddy/Sources/App/EditorInspector.swift \
     NotchBuddy/Sources/App/DeviceOrchestrator.swift \
     NotchBuddy/Sources/App/DiscordService.swift \
     NotchBuddy/Sources/App/MochiMeshOrchestrator.swift \

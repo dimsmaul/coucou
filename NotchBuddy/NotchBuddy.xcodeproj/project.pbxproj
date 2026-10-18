@@ -81,6 +81,7 @@
 		295F8FE5A9E2E8F1A6389DEE /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B53E4CAD2BCC77B280689B0F /* HomeView.swift */; };
 		2A30FA2F046492E22A1C5719 /* ServiceDetail.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65F64746B2740D5FE26B7E5A /* ServiceDetail.swift */; };
 		2A57CCE7D6813E6340C036BE /* MailViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23F907A5CC3CC05876548E96 /* MailViews.swift */; };
+		2C51310D9CA8AC3D15863161 /* EditorInspector.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFE228D0C96FC43B8897E029 /* EditorInspector.swift */; };
 		2C798C3837A63B9BB561A1A0 /* HookServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79D8DD79C3DD9BBC584B3CB2 /* HookServer.swift */; };
 		2CC2E3B688B15BBEB3AE3BCE /* WindowContextCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = E91B733ADC638E14E9BB6EFA /* WindowContextCapture.swift */; };
 		2CCB7B8A27A4A1017D031C59 /* MochiPersona.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F52AC0DE10005C099046CC2 /* MochiPersona.swift */; };
@@ -225,6 +226,7 @@
 		8A6B3688D6B3BF728D106D8B /* UserIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4A13AEE6E06F46CEC9D908C /* UserIdentity.swift */; };
 		8AC19BAF88822CB31519D447 /* CoucouIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 708E1FD9894461B4AD727DB1 /* CoucouIntents.swift */; };
 		8BC13872CB8554A59C85632D /* DeviceOrchestrator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4DB198584B14871521C0923 /* DeviceOrchestrator.swift */; };
+		8C16EDB7475232E49713C34A /* EditorInspector.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFE228D0C96FC43B8897E029 /* EditorInspector.swift */; };
 		8C32A0C3EAF536D3836F61D5 /* GreetingCanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C581F7B1A9F14B281B60063E /* GreetingCanvasView.swift */; };
 		8C5CF7C82640DD6A0685A0D5 /* ApprovalQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BAE224C1C435C9FFD05BF65 /* ApprovalQueue.swift */; };
 		8C785917FD0740DAE56420A4 /* ServiceSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84ECC59BE7CDDEE348FC7096 /* ServiceSnapshot.swift */; };
@@ -641,6 +643,7 @@
 		DDB831F5623E699A2506698E /* NotificationViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationViewController.swift; sourceTree = "<group>"; };
 		DE18399D1CD69468CCF57966 /* MochiActivityState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MochiActivityState.swift; sourceTree = "<group>"; };
 		DE925A6844FE3E3C09131CE0 /* VoiceTranscriptHistory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceTranscriptHistory.swift; sourceTree = "<group>"; };
+		DFE228D0C96FC43B8897E029 /* EditorInspector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorInspector.swift; sourceTree = "<group>"; };
 		E18E74B3586BC0861C69E70A /* InstructionComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstructionComposer.swift; sourceTree = "<group>"; };
 		E6AAC67875F84A862BC2A9AF /* ServiceDetailRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServiceDetailRunner.swift; sourceTree = "<group>"; };
 		E76E1DE821ED07C3135EF1F6 /* PouchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PouchView.swift; sourceTree = "<group>"; };
@@ -722,6 +725,7 @@
 				A4DB198584B14871521C0923 /* DeviceOrchestrator.swift */,
 				56A2317343D062ACCAF4E5BD /* DictationTranscript.swift */,
 				31720A18CA6F97E7F65D2540 /* DiscordService.swift */,
+				DFE228D0C96FC43B8897E029 /* EditorInspector.swift */,
 				3232F258523DD8D09B670363 /* FileDropView.swift */,
 				0596FD03875A10BD2CCBE332 /* FlowAudioBands.swift */,
 				CCF7FA8DEA10FA889A60447B /* FlowCleanup.swift */,
@@ -1226,6 +1230,7 @@
 				FD4B5673A5427128DE1910F3 /* DictationTranscript.swift in Sources */,
 				077ECE0906D8E820BD5FA764 /* DiffEngine.swift in Sources */,
 				3F0C9FFE63FEAC39DD9C2212 /* DiscordService.swift in Sources */,
+				8C16EDB7475232E49713C34A /* EditorInspector.swift in Sources */,
 				541AF30CF808CC0FC1B8D97D /* ElevenLabsTTS.swift in Sources */,
 				B4F12F8F978FCA7E5309DE28 /* EnergyVAD.swift in Sources */,
 				9B0A1CABB8FB8209E20D9B06 /* EntityResolver.swift in Sources */,
@@ -1471,6 +1476,7 @@
 				2768A639F60C4B4C6EC98436 /* DictationTranscript.swift in Sources */,
 				4D958F2DDCE9504490FDA357 /* DiffEngine.swift in Sources */,
 				242192B4DDF6E6E90C149BDC /* DiscordService.swift in Sources */,
+				2C51310D9CA8AC3D15863161 /* EditorInspector.swift in Sources */,
 				D7FD1948C7F97D6A2904CDBE /* ElevenLabsTTS.swift in Sources */,
 				A94F75489794D9C95E584B56 /* EnergyVAD.swift in Sources */,
 				118D3ABA767EE8A7E55B0F8E /* EntityResolver.swift in Sources */,

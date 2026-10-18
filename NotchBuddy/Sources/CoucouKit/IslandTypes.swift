@@ -59,7 +59,7 @@ struct ApprovalInfo: Sendable {
     var command: String
     /// tool_input serialized to JSON with sortedKeys, "" if absent — used to match PostToolUse.
     var inputKey: String
-    /// Pill that owns this approval: "integration_claude", "agent_cursor", "agent_vscodium", or "agent_codex".
+    /// Pill that owns this approval: "integration_claude", "agent_cursor", "agent_vscodium", "agent_zed", or "agent_codex".
     var pillId: String
     /// Queued request this card answers (Mac): a decision is only accepted for this id.
     var id: UUID = UUID()

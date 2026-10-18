@@ -56,6 +56,7 @@ struct PillDefinition {
         case "integration_claude": return "Claude Code"
         case "agent_cursor":       return "Cursor"
         case "agent_vscodium":     return "VSCodium"
+        case "agent_zed":          return "Zed"
         case "agent_codex":        return "Codex"
         case "agent_hermes":       return "Hermes"
         case "agent_claude-desktop": return "Claude Desktop"
@@ -76,6 +77,8 @@ enum PillCatalog {
               category: .workspace, subtitle: "Integration",  source: .agent),
         .init(id: "agent_vscodium",      name: "VSCodium",    color: "#2F80ED",
               category: .workspace, subtitle: "Integration",  source: .agent),
+        .init(id: "agent_zed",           name: "Zed",         color: "#4ADE80",
+              category: .workspace, subtitle: "Integration",  source: .agent,  githubOnly: true),
         .init(id: "agent_antigravity",   name: "Antigravity", color: "#E879F9",
               category: .workspace, subtitle: "Integration",  source: .agent,  githubOnly: true),
         .init(id: "agent_codex",         name: "Codex",       color: "#2DD4BF",

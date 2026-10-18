@@ -25,6 +25,16 @@ enum ZedBridgeTests {
         print("ZedBridge.isZedDetected")
         let detected = ZedBridge.isZedDetected()
         check("Zed detected on this Mac", detected)
+        check("Zed is installed", ZedBridge.isInstalled)
+        check("candidateAppPaths not empty", !ZedBridge.candidateAppPaths.isEmpty)
+        let recents = ZedBridge.recentWorkspaces()
+        check("recentWorkspaces returns array", recents is [String])
+
+        print("EditorInspector.inspectEditorsAndAgents")
+        let summary = EditorInspector.inspectEditorsAndAgents()
+        check("inspectEditorsAndAgents returns non-nil report", !summary.formattedReport.isEmpty)
+        check("totalAgentsCount >= 0", summary.totalAgentsCount >= 0)
+        print("  Found \(summary.openWindows.count) open windows, \(summary.totalAgentsCount) running agents")
 
         print("ChatProvider.zed integration")
         check("zed display name", ChatProvider.zed.displayName == "Zed AI")

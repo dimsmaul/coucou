@@ -1,6 +1,7 @@
 import Foundation
+import AppKit
 
-// MARK: - Zed Subscription Bridge Service
+// MARK: - Zed Subscription & Code Editor Bridge Service
 
 enum ZedBridge {
 
@@ -82,11 +83,200 @@ enum ZedBridge {
         return nil
     }
 
+    // MARK: - Code Editor Identity & Paths
+
+    /// Standard bundle identifiers for Zed builds on macOS.
+    static let bundleIdentifiers: [String] = [
+        "dev.zed.Zed",
+        "dev.zed.Zed-Preview"
+    ]
+
+    /// Known application paths where Zed is typically installed.
+    static let candidateAppPaths: [String] = [
+        "/Applications/Zed.app",
+        "/Applications/Zed - Preview.app",
+        "\(FileManager.default.homeDirectoryForCurrentUser.path)/Applications/Zed.app",
+        "\(FileManager.default.homeDirectoryForCurrentUser.path)/Applications/Zed - Preview.app"
+    ]
+
+    /// Known CLI binary paths where Zed CLI is typically located.
+    static let candidateBinaryPaths: [String] = [
+        "/Applications/Zed.app/Contents/MacOS/cli",
+        "/Applications/Zed - Preview.app/Contents/MacOS/cli",
+        "/usr/local/bin/zed",
+        "/opt/homebrew/bin/zed",
+        "\(FileManager.default.homeDirectoryForCurrentUser.path)/.local/bin/zed"
+    ]
+
+    /// Checks if Zed is installed on the system (via bundle ID, app bundle, or CLI).
+    static var isInstalled: Bool {
+        for id in bundleIdentifiers {
+            if NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) != nil {
+                return true
+            }
+        }
+        for path in candidateAppPaths {
+            if FileManager.default.fileExists(atPath: path) {
+                return true
+            }
+        }
+        return resolveExecutablePath() != nil
+    }
+
+    /// Checks if a Zed instance is currently running.
+    static var isRunning: Bool {
+        let running = NSWorkspace.shared.runningApplications
+        return running.contains { app in
+            guard let id = app.bundleIdentifier?.lowercased() else { return false }
+            return bundleIdentifiers.contains(where: { id.contains($0.lowercased()) }) || id.contains("dev.zed")
+        }
+    }
+
+    /// Resolves the URL for the installed Zed app bundle.
+    static func resolveAppURL() -> URL? {
+        for id in bundleIdentifiers {
+            if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) {
+                return url
+            }
+        }
+        for path in candidateAppPaths {
+            if FileManager.default.fileExists(atPath: path) {
+                return URL(fileURLWithPath: path)
+            }
+        }
+        return nil
+    }
+
+    /// Resolves the executable path of the `zed` CLI.
+    static func resolveExecutablePath() -> String? {
+        let fm = FileManager.default
+        for path in candidateBinaryPaths {
+            if fm.isExecutableFile(atPath: path) {
+                return path
+            }
+        }
+        return nil
+    }
+
+    /// Opens Zed, optionally targeting a specific workspace folder.
+    @discardableResult
+    static func open(workspacePath: String? = nil) -> Bool {
+        let appURL = resolveAppURL()
+
+        // 1. If a workspace/folder path is provided, open it directly in Zed
+        if let path = workspacePath, !path.isEmpty {
+            if let cli = resolveExecutablePath() {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: cli)
+                process.arguments = [path]
+                if (try? process.run()) != nil {
+                    return true
+                }
+            }
+            if let appURL = appURL {
+                let folderURL = URL(fileURLWithPath: path)
+                NSWorkspace.shared.open(
+                    [folderURL],
+                    withApplicationAt: appURL,
+                    configuration: .init(),
+                    completionHandler: nil
+                )
+                return true
+            }
+        }
+
+        // 2. Bring existing running instance to front
+        let runningApps = NSWorkspace.shared.runningApplications
+        if let running = runningApps.first(where: { app in
+            guard let id = app.bundleIdentifier?.lowercased() else { return false }
+            return bundleIdentifiers.contains(where: { id.contains($0.lowercased()) }) || id.contains("dev.zed")
+        }) {
+            running.activate()
+            return true
+        }
+
+        // 3. Launch fresh via NSWorkspace
+        if let appURL = appURL {
+            NSWorkspace.shared.openApplication(at: appURL, configuration: .init(), completionHandler: nil)
+            return true
+        }
+
+        // 4. Fallback: run CLI binary if found
+        if let cli = resolveExecutablePath() {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: cli)
+            process.arguments = []
+            try? process.run()
+            return true
+        }
+
+        return false
+    }
+
+    /// Opens a specific file in Zed, optionally navigating to line and column.
+    @discardableResult
+    static func openFile(path: String, line: Int? = nil, column: Int? = nil) -> Bool {
+        if let cli = resolveExecutablePath() {
+            let target: String
+            if let line = line {
+                if let column = column {
+                    target = "\(path):\(line):\(column)"
+                } else {
+                    target = "\(path):\(line)"
+                }
+            } else {
+                target = path
+            }
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: cli)
+            process.arguments = [target]
+            if (try? process.run()) != nil {
+                return true
+            }
+        }
+
+        if let appURL = resolveAppURL() {
+            NSWorkspace.shared.open(
+                [URL(fileURLWithPath: path)],
+                withApplicationAt: appURL,
+                configuration: .init(),
+                completionHandler: nil
+            )
+            return true
+        }
+        return false
+    }
+
+    /// Queries recently opened workspaces from Zed's local SQLite database.
+    static func recentWorkspaces() -> [String] {
+        let dbPath = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/Zed/db/0-stable/db.sqlite").path
+        guard FileManager.default.fileExists(atPath: dbPath) else { return [] }
+
+        let pipe = Pipe()
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+        proc.arguments = [dbPath, "SELECT paths FROM workspaces ORDER BY timestamp DESC LIMIT 10;"]
+        proc.standardOutput = pipe
+        try? proc.run()
+        proc.waitUntilExit()
+
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        guard let text = String(data: data, encoding: .utf8) else { return [] }
+
+        var results: [String] = []
+        for line in text.components(separatedBy: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty && !results.contains(trimmed) {
+                results.append(trimmed)
+            }
+        }
+        return results
+    }
+
     /// Checks if Zed is installed or settings exist.
     static func isZedDetected() -> Bool {
-        let appExists = FileManager.default.fileExists(atPath: "/Applications/Zed.app")
-        let configExists = FileManager.default.fileExists(atPath: zedSettingsURL.path)
-        return appExists || configExists
+        isInstalled || FileManager.default.fileExists(atPath: zedSettingsURL.path)
     }
 
     /// Streams a chat completion through Zed's LLM proxy endpoint using the active Zed token.

@@ -9,6 +9,7 @@ swiftc -module-cache-path /tmp/swift-cache \
     NotchBuddy/Sources/CoucouKit/IslandScreenGeometry.swift \
     NotchBuddy/Sources/CoucouKit/IslandTypes.swift \
     NotchBuddy/Sources/App/LocalChat.swift \
+    NotchBuddy/Sources/App/EditorInspector.swift \
     NotchBuddy/Sources/App/ZedBridge.swift \
     tests/ZedBridgeTests.swift \
     -o "$TEST_DIR/zed-bridge-tests"
