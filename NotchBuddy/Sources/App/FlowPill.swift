@@ -524,7 +524,15 @@ final class FlowPillController {
 
     init(bands: FlowAudioBands) {
         self.bands = bands
-        model.stopNote = { NoteTaker.shared.stop() }
+        model.stopNote = {
+            Task { @MainActor in
+                if ScreenRecorder.shared.isRecording {
+                    await ScreenRecorder.shared.stopRecording()
+                } else {
+                    NoteTaker.shared.stop()
+                }
+            }
+        }
         model.dismissAnnouncement = { [weak self] in self?.dismissAnnouncement() }
     }
 

@@ -282,6 +282,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         CalcomPoller.shared.start()
         NotionPoller.shared.start()
         HuggingFacePoller.shared.start()
+        EditorInspector.onUpdate = { fresh in
+            AppState.shared.editorSummary = fresh
+        }
+        EditorInspector.startPoller()
+        MeetingDetector.shared.start()
         NotificationCenter.default.addObserver(self, selector: #selector(openSettingsFromNotification(_:)),
                                                name: .openFullSettings, object: nil)
         // After the greeting ends, fly Mochi back to the desktop if it was there at last quit

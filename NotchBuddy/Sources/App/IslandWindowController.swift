@@ -2070,6 +2070,7 @@ extension Notification.Name {
     static let openWardrobeFromDesktop = Notification.Name("notchBuddy.openWardrobeFromDesktop")
     // Island moved to another screen (resting size may differ: notch vs bar)
     static let islandScreenChanged = Notification.Name("notchBuddy.islandScreenChanged")
+    static let notesHeightChanged = Notification.Name("notchBuddy.notesHeightChanged")
 }
 
 // MARK: - islandSize (takes real notch dimensions)
@@ -2083,8 +2084,11 @@ func islandSize(mode: IslandMode, view: IslandView,
     case .hidden:   return (nw, nh)
     case .compact:  return (nw + 160, nh)
     case .expanded:
-        let layout = IslandConst.viewLayouts[view]!
+        let layout = IslandConst.viewLayouts[view] ?? ViewLayout(height: 160, botX: 68, botY: nil, botDiameter: 58, agentMode: .none)
         if view == .question, let h = QuestionLayout.height {
+            return (IslandConst.expandedWidth, h)
+        }
+        if view == .notes, let h = NotesLayout.height {
             return (IslandConst.expandedWidth, h)
         }
         let isIntegrationDetail = showingIntegrationDetail ?? (Thread.isMainThread ? MainActor.assumeIsolated { AppState.shared.showingIntegrationDetail } : false)

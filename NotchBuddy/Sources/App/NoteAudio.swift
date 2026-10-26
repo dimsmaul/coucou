@@ -75,7 +75,7 @@ final class ChannelRecorder: @unchecked Sendable {
             let chunk = (start: state.pendingStart, samples: state.pending)
             state.pendingStart = Double(state.total) / Self.sampleRate
             state.pending.removeAll(keepingCapacity: true)
-            return Self.rms(chunk.samples[...]) < 0.004 ? nil : chunk
+            return Self.rms(chunk.samples[...]) < 0.012 ? nil : chunk
         }
     }
 

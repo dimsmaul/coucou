@@ -105,18 +105,22 @@ final class NoteTaker: ObservableObject {
 
     // MARK: - Recording
 
-    func start() async {
-        guard recording == nil, !starting else { return }
+    @discardableResult
+    func start(mic: Bool = true, system: Bool = true, liveTranscript: Bool = true) async -> UUID? {
+        if let current = recording { return current.id }
+        guard !starting else { return nil }
         starting = true
         defer { starting = false }
         startError = nil
-        guard Parakeet.shared.isReady else {
+        if liveTranscript && !Parakeet.shared.isReady {
             startError = String(localized: "notes.error.models")
-            return
+            return nil
         }
-        guard await AVAudioApplication.requestRecordPermission() else {
-            startError = String(localized: "notes.error.mic")
-            return
+        if mic {
+            guard await AVAudioApplication.requestRecordPermission() else {
+                startError = String(localized: "notes.error.mic")
+                return nil
+            }
         }
         let now = Date()
         var note = Note(title: String(format: String(localized: "notes.default-title %@"),
@@ -127,37 +131,44 @@ final class NoteTaker: ObservableObject {
         let dir = Self.folder(for: note.id)
         do {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            let micChannel = try ChannelRecorder(url: dir.appendingPathComponent("mic.wav"), label: "fr.louisraille.NotchBuddy.notetaker.mic")
-            let systemChannel = try ChannelRecorder(url: dir.appendingPathComponent("system.wav"), label: "fr.louisraille.NotchBuddy.notetaker.sys")
-            let mic = MicCapture()
-            guard mic.start(sink: { micChannel.append($0) }) else {
-                startError = String(localized: "notes.error.mic")
-                try? FileManager.default.removeItem(at: dir)
-                return
+            if mic {
+                let micChannel = try ChannelRecorder(url: dir.appendingPathComponent("mic.wav"), label: "fr.louisraille.NotchBuddy.notetaker.mic")
+                let micCapture = MicCapture()
+                guard micCapture.start(sink: { micChannel.append($0) }) else {
+                    startError = String(localized: "notes.error.mic")
+                    try? FileManager.default.removeItem(at: dir)
+                    return nil
+                }
+                self.mic = micCapture
+                self.micChannel = micChannel
             }
-            let tap = SystemAudioTap()
-            do {
-                try tap.start(sink: { systemChannel.append($0) })
-                self.tap = tap
-                self.systemChannel = systemChannel
-            } catch {
-                // Without the Mac's sound, the call is noted from the microphone alone.
-                appendAppLog("nb.log", "[Notetaker] system audio unavailable: \(error.localizedDescription)")
-                self.tap = nil
-                self.systemChannel = nil
+            if system {
+                let systemChannel = try ChannelRecorder(url: dir.appendingPathComponent("system.wav"), label: "fr.louisraille.NotchBuddy.notetaker.sys")
+                let tap = SystemAudioTap()
+                do {
+                    try tap.start(sink: { systemChannel.append($0) })
+                    self.tap = tap
+                    self.systemChannel = systemChannel
+                } catch {
+                    // Without the Mac's sound, the call is noted from the microphone alone.
+                    appendAppLog("nb.log", "[Notetaker] system audio unavailable: \(error.localizedDescription)")
+                    self.tap = nil
+                    self.systemChannel = nil
+                }
             }
-            self.mic = mic
-            self.micChannel = micChannel
         } catch {
             startError = error.localizedDescription
-            return
+            return nil
         }
         recording = note
         notes.insert(note, at: 0)
         save(note)
-        FlowDictation.shared.pill.setNote(note.start)
-        SoundEngine.shared.play("blip")
-        startLiveLoop()
+        if liveTranscript {
+            FlowDictation.shared.pill.setNote(note.start)
+            SoundEngine.shared.play("blip")
+            startLiveLoop()
+        }
+        return note.id
     }
 
     /// Coucou quits during a call: the recordings are closed properly, and the transcript is
@@ -176,28 +187,79 @@ final class NoteTaker: ObservableObject {
     }
 
     func stop() {
-        guard var note = recording else { return }
-        liveTask?.cancel()
-        liveTask = nil
-        mic?.stop()
-        tap?.stop()
-        mic = nil
-        tap = nil
-        let micChannel = self.micChannel, systemChannel = self.systemChannel
-        self.micChannel = nil
-        self.systemChannel = nil
-        micLevel = 0
-        systemLevel = 0
-        note.end = Date()
-        note.status = .processing
-        recording = nil
-        replace(note)
-        FlowDictation.shared.pill.setNote(nil)
         Task { @MainActor in
+            _ = await self.stopAndExportAudio()
+        }
+    }
+
+    /// Stops recording, immediately exports combined audio to audio.m4a, optionally copies to destination, and starts transcription.
+    @discardableResult
+    func stopAndExportAudio(for id: UUID? = nil, destination: URL? = nil) async -> URL? {
+        var note = recording
+        if note == nil, let targetID = id ?? notes.first?.id {
+            note = self.note(targetID)
+        }
+        guard var activeNote = note else { return nil }
+
+        let isCurrentRecording = recording?.id == activeNote.id
+
+        if isCurrentRecording {
+            liveTask?.cancel()
+            liveTask = nil
+            mic?.stop()
+            tap?.stop()
+            mic = nil
+            tap = nil
+            let micChannel = self.micChannel, systemChannel = self.systemChannel
+            self.micChannel = nil
+            self.systemChannel = nil
+            micLevel = 0
+            systemLevel = 0
+            activeNote.end = Date()
+            activeNote.status = .processing
+            recording = nil
+            replace(activeNote)
+            FlowDictation.shared.pill.setNote(nil)
+
+            // Close audio channels and wait for samples to finish writing to disk
             await micChannel?.close()
             await systemChannel?.close()
-            await self.process(note.id)
         }
+
+        let dir = Self.folder(for: activeNote.id)
+        let micURL = dir.appendingPathComponent("mic.wav")
+        let systemURL = dir.appendingPathComponent("system.wav")
+        let audioM4A = dir.appendingPathComponent("audio.m4a")
+
+        // Immediately export audio.m4a before running transcription
+        let exported = await Self.exportCombinedAudio(micURL: micURL, systemURL: systemURL, outputURL: audioM4A)
+        let resolvedURL: URL
+        if FileManager.default.fileExists(atPath: audioM4A.path) {
+            resolvedURL = audioM4A
+        } else if FileManager.default.fileExists(atPath: micURL.path) {
+            let fallbackWav = dir.appendingPathComponent("audio.wav")
+            try? FileManager.default.copyItem(at: micURL, to: fallbackWav)
+            resolvedURL = FileManager.default.fileExists(atPath: fallbackWav.path) ? fallbackWav : micURL
+        } else if FileManager.default.fileExists(atPath: systemURL.path) {
+            resolvedURL = systemURL
+        } else {
+            resolvedURL = audioM4A
+        }
+
+        if let dest = destination, FileManager.default.fileExists(atPath: resolvedURL.path) {
+            try? FileManager.default.removeItem(at: dest)
+            try? FileManager.default.copyItem(at: resolvedURL, to: dest)
+        }
+
+        // Process transcription & summary in background if was current recording
+        if isCurrentRecording {
+            let noteID = activeNote.id
+            Task { @MainActor in
+                await self.process(noteID)
+            }
+        }
+
+        return destination ?? resolvedURL
     }
 
     /// Every second while recording: the levels, and the stretches ending on a pause go to Parakeet
@@ -268,8 +330,18 @@ final class NoteTaker: ObservableObject {
             current.error = nil
             replace(current)
             note = current
-            try? FileManager.default.removeItem(at: micURL)
-            try? FileManager.default.removeItem(at: systemURL)
+
+            // Ensure audio.m4a exists for in-app playback and recording archive
+            let audioM4A = dir.appendingPathComponent("audio.m4a")
+            if !FileManager.default.fileExists(atPath: audioM4A.path) {
+                await Self.exportCombinedAudio(micURL: micURL, systemURL: systemURL, outputURL: audioM4A)
+            }
+
+            // Only remove raw WAVs if audio.m4a was successfully saved
+            if FileManager.default.fileExists(atPath: audioM4A.path) {
+                try? FileManager.default.removeItem(at: micURL)
+                try? FileManager.default.removeItem(at: systemURL)
+            }
             appendAppLog("nb.log", "[Notetaker] transcript: \(note.lines.count) lines, \(note.speakers.count) speakers")
         } catch {
             appendAppLog("nb.log", "[Notetaker] transcript failed: \(error.localizedDescription)")
@@ -309,9 +381,15 @@ final class NoteTaker: ObservableObject {
         } catch ASRError.invalidAudioData {
             return []   // too short to hold words
         }
-        return buildWordTimings(from: result.tokenTimings ?? []).map {
-            TimedWord(text: $0.word, start: $0.startTime, end: $0.endTime)
+        let isRussianLocale = Locale.current.language.languageCode?.identifier == "ru"
+        let words = buildWordTimings(from: result.tokenTimings ?? []).compactMap { item -> TimedWord? in
+            let text = item.word.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { return nil }
+            let hasCyrillic = text.unicodeScalars.contains { $0.value >= 0x0400 && $0.value <= 0x04FF }
+            if hasCyrillic && !isRussianLocale { return nil }
+            return TimedWord(text: text, start: item.startTime, end: item.endTime)
         }
+        return words
     }
 
     nonisolated private static func diarize(_ url: URL) async throws -> [SpeakerTurn] {
@@ -472,6 +550,125 @@ final class NoteTaker: ObservableObject {
         panel.allowedContentTypes = [UTType(filenameExtension: "md") ?? .plainText]
         guard panel.runModal() == .OK, let url = panel.url else { return }
         try? markdown(note).write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    func audioURL(for id: UUID) -> URL? {
+        let dir = Self.folder(for: id)
+        let m4a = dir.appendingPathComponent("audio.m4a")
+        if FileManager.default.fileExists(atPath: m4a.path) { return m4a }
+        let fallbackWav = dir.appendingPathComponent("audio.wav")
+        if FileManager.default.fileExists(atPath: fallbackWav.path) { return fallbackWav }
+        let mic = dir.appendingPathComponent("mic.wav")
+        if FileManager.default.fileExists(atPath: mic.path) { return mic }
+        return nil
+    }
+
+    @discardableResult
+    static func exportCombinedAudio(micURL: URL, systemURL: URL, outputURL: URL) async -> Bool {
+        let fm = FileManager.default
+        let micSize = (try? fm.attributesOfItem(atPath: micURL.path)[.size] as? Int64) ?? 0
+        let sysSize = (try? fm.attributesOfItem(atPath: systemURL.path)[.size] as? Int64) ?? 0
+        let hasMic = fm.fileExists(atPath: micURL.path) && micSize > 100
+        let hasSys = fm.fileExists(atPath: systemURL.path) && sysSize > 100
+        guard hasMic || hasSys else { return false }
+
+        // Prefer ffmpeg if available for superfast and robust mixing
+        if let _ = ScreenRecorder.ffmpegPath {
+            try? fm.removeItem(at: outputURL)
+            var args: [String] = ["-y"]
+            if hasMic && hasSys {
+                args += ["-i", micURL.path, "-i", systemURL.path,
+                         "-filter_complex", "[0:a][1:a]amix=inputs=2:duration=longest:dropout_transition=2[a]",
+                         "-map", "[a]", "-c:a", "aac", "-b:a", "128k", outputURL.path]
+            } else if hasMic {
+                args += ["-i", micURL.path, "-c:a", "aac", "-b:a", "128k", outputURL.path]
+            } else {
+                args += ["-i", systemURL.path, "-c:a", "aac", "-b:a", "128k", outputURL.path]
+            }
+
+            let ok = await ScreenRecorder.runFFmpeg(arguments: args)
+            if ok && fm.fileExists(atPath: outputURL.path) {
+                let size = (try? fm.attributesOfItem(atPath: outputURL.path)[.size] as? Int64) ?? 0
+                if size > 100 {
+                    return true
+                }
+            }
+        }
+
+        // Native AVFoundation Fallback
+        if hasMic && !hasSys {
+            let micAsset = AVURLAsset(url: micURL)
+            guard let exporter = AVAssetExportSession(asset: micAsset, presetName: AVAssetExportPresetAppleM4A) else {
+                let fallbackWav = outputURL.deletingPathExtension().appendingPathExtension("wav")
+                try? fm.copyItem(at: micURL, to: fallbackWav)
+                return false
+            }
+            try? fm.removeItem(at: outputURL)
+            exporter.outputURL = outputURL
+            exporter.outputFileType = .m4a
+            await exporter.export()
+            if exporter.status == .completed && fm.fileExists(atPath: outputURL.path) {
+                return true
+            }
+            let fallbackWav = outputURL.deletingPathExtension().appendingPathExtension("wav")
+            try? fm.copyItem(at: micURL, to: fallbackWav)
+            return false
+        }
+
+        // Both mic and system audio exist: mix using AVMutableComposition + AVMutableAudioMix
+        let comp = AVMutableComposition()
+        guard let micTrack = comp.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid),
+              let sysTrack = comp.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) else {
+            return false
+        }
+
+        let micAsset = AVURLAsset(url: micURL)
+        let sysAsset = AVURLAsset(url: systemURL)
+
+        let mTracks = micAsset.tracks(withMediaType: .audio)
+        if let mSrc = mTracks.first {
+            try? micTrack.insertTimeRange(CMTimeRange(start: .zero, duration: micAsset.duration), of: mSrc, at: .zero)
+        }
+
+        let sTracks = sysAsset.tracks(withMediaType: .audio)
+        if let sSrc = sTracks.first {
+            try? sysTrack.insertTimeRange(CMTimeRange(start: .zero, duration: sysAsset.duration), of: sSrc, at: .zero)
+        }
+
+        let audioMix = AVMutableAudioMix()
+        let p1 = AVMutableAudioMixInputParameters(track: micTrack)
+        p1.setVolume(1.0, at: .zero)
+        let p2 = AVMutableAudioMixInputParameters(track: sysTrack)
+        p2.setVolume(1.0, at: .zero)
+        audioMix.inputParameters = [p1, p2]
+
+        try? fm.removeItem(at: outputURL)
+        guard let exporter = AVAssetExportSession(asset: comp, presetName: AVAssetExportPresetAppleM4A) else { return false }
+        exporter.outputURL = outputURL
+        exporter.outputFileType = .m4a
+        exporter.audioMix = audioMix
+        await exporter.export()
+
+        if exporter.status == .completed && fm.fileExists(atPath: outputURL.path) {
+            return true
+        }
+
+        // Fallback: If mix export session failed, export mic alone
+        if hasMic {
+            let fallbackAsset = AVURLAsset(url: micURL)
+            if let fallbackExp = AVAssetExportSession(asset: fallbackAsset, presetName: AVAssetExportPresetAppleM4A) {
+                try? fm.removeItem(at: outputURL)
+                fallbackExp.outputURL = outputURL
+                fallbackExp.outputFileType = .m4a
+                await fallbackExp.export()
+                if fallbackExp.status == .completed && fm.fileExists(atPath: outputURL.path) {
+                    return true
+                }
+            }
+            let fallbackWav = outputURL.deletingPathExtension().appendingPathExtension("wav")
+            try? fm.copyItem(at: micURL, to: fallbackWav)
+        }
+        return false
     }
 
     // MARK: - Files

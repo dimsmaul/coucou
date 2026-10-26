@@ -210,6 +210,13 @@ struct IslandContainer: View {
             islandWidth  = w
             islandHeight = (state.mode == .expanded && state.view == .prompt) ? chatPromptHeight : h
         }
+        .onReceive(NotificationCenter.default.publisher(for: .notesHeightChanged)) { _ in
+            guard state.mode == .expanded, state.view == .notes else { return }
+            let (_, h) = islandSize(mode: .expanded, view: .notes,
+                                    progress: state.uploadProgress,
+                                    nw: state.notchWidth, nh: state.notchHeight)
+            withAnimation(openSpring) { islandHeight = h }
+        }
     }
 
     private func modeOrder(_ m: IslandMode) -> Int {
@@ -401,7 +408,7 @@ func botPosition(mode: IslandMode, view: IslandView, islandW: CGFloat, islandH: 
             : (islandW / 2, resting.botCenterY, resting.botDiameter, 1)
     case .compact: return (40, resting.botCenterY, resting.botDiameter, 1)
     case .expanded:
-        let layout = IslandConst.viewLayouts[view]!
+        let layout = IslandConst.viewLayouts[view] ?? ViewLayout(height: 160, botX: 68, botY: nil, botDiameter: 58, agentMode: .none)
         let diameter = layout.botDiameter
         // Uploading: Mochi dot rides the leading edge of the progress fill.
         // Bar in island coords: left=36, width=526. cx = 36 + progress*526 (dot center at fill right edge).
@@ -518,9 +525,9 @@ struct IslandContentView: View {
                 ForEach(IslandView.allCases, id: \.self) { v in
                     let active = state.view == v
                     // Views that fill available height instead of the fixed 98pt content frame:
-                    // chat (prompt) is always flexible; mail and pouch are flexible only when active so
+                    // chat (prompt) is always flexible; mail, pouch and recordHub are flexible only when active so
                     // they don't push the ZStack taller when inactive; overview is flexible when integration detail is active.
-                    let isTall = v == .prompt || ((v == .mail || v == .pouch) && active) || (v == .overview && state.showingIntegrationDetail && active)
+                    let isTall = v == .prompt || ((v == .mail || v == .pouch || v == .recordHub || v == .notes) && active) || (v == .overview && state.showingIntegrationDetail && active)
                     let anim: Animation = active
                         ? .spring(response: 0.4, dampingFraction: 0.8).delay(0.16)
                         : .easeIn(duration: 0.16)
@@ -576,6 +583,7 @@ struct IslandHeader: View {
                 })
                 TabButton(icon: "plus", view: .upload, state: state)
                 #if !APPSTORE
+                RecordTabButton(state: state)
                 // The pouch, any time its switch is on (even empty).
                 if pouch.isEnabled {
                     TabButton(icon: "paperclip", view: .pouch, state: state)
@@ -598,6 +606,8 @@ struct IslandHeader: View {
                 }
                 #endif
                 HStack(spacing: 14) {
+                    NotesHeaderButton()
+
                     PomodoroHeaderButton()
 
                     GitHubAccountHeaderDropdown()
@@ -676,6 +686,53 @@ struct TabButton: View {
         .onHover { isHovered = $0 }
     }
 }
+
+#if !APPSTORE
+struct RecordTabButton: View {
+    @ObservedObject var state: AppState
+    @ObservedObject private var recorder = ScreenRecorder.shared
+    @State private var isHovered = false
+
+    private var isOn: Bool { state.view == .recordHub }
+
+    var body: some View {
+        Button(action: {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                if state.view == .recordHub {
+                    state.view = .overview
+                } else {
+                    state.view = .recordHub
+                }
+            }
+        }) {
+            ZStack(alignment: .topTrailing) {
+                Image(systemName: "record.circle")
+                    .font(.system(size: 13))
+                    .foregroundColor(
+                        recorder.isRecording ? Color(hex: "#EF4444") :
+                        (isOn ? Color(hex: "#F5F6F8") : (isHovered ? Color(hex: "#B0B5BE") : Color(hex: "#8E939C")))
+                    )
+                    .frame(width: 30, height: 22)
+                    .background(
+                        isOn ? Color(hex: "#1D1F23") :
+                        isHovered ? Color.white.opacity(0.07) : Color.clear
+                    )
+                    .clipShape(Capsule())
+
+                if recorder.isRecording {
+                    Circle()
+                        .fill(Color(hex: "#EF4444"))
+                        .frame(width: 4.5, height: 4.5)
+                        .offset(x: -2, y: 2)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .help(recorder.isRecording ? "Recording in progress" : "Record")
+    }
+}
+#endif
 
 // MARK: - Claude Plan header pill (GitHub build only)
 
@@ -845,6 +902,34 @@ struct GitHubAccountHeaderDropdown: View {
         } else {
             menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
         }
+    }
+}
+
+// MARK: - Notes & Checklist (Header Button)
+
+struct NotesHeaderButton: View {
+    @EnvironmentObject var state: AppState
+    @State private var hovered = false
+
+    var body: some View {
+        Button(action: {
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+                if state.view == .notes {
+                    state.view = .overview
+                } else {
+                    state.view = .notes
+                    NSApp.activate(ignoringOtherApps: true)
+                }
+            }
+        }) {
+            Image(systemName: "note.text")
+                .font(.system(size: 14))
+                .foregroundColor(hovered || state.view == .notes ? Color(hex: "#F5F6F8") : Color(hex: "#8E939C"))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+        .help("Notes")
     }
 }
 

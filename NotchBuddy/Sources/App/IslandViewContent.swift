@@ -53,6 +53,14 @@ struct IslandViewContent: View {
             #endif
         case .pomodoro:
             PomodoroIslandView(state: state)
+        case .recordHub:
+            #if !APPSTORE
+            RecordHubView(state: state)
+            #else
+            EmptyView()
+            #endif
+        case .notes:
+            NotesIslandView(state: state)
         }
     }
 }
@@ -184,13 +192,22 @@ struct OverviewView: View {
             }
             .frame(width: 322)
 
-            // Right card: agent pills
+            // Right card: agent pills or active agents in selected workspace
             CardBackground(wash: nil) {
-                AgentPillsView(state: state)
+                if state.showingIntegrationDetail,
+                   let focusTask = agent,
+                   (focusTask.id == "agent_vscodium" || focusTask.id == "agent_zed") {
+                    EditorWorkspaceAgentsRightCardView(state: state, editorTask: focusTask)
+                        .transition(.opacity)
+                } else {
+                    AgentPillsView(state: state)
+                        .transition(.opacity)
+                }
             }
         }
         .onChange(of: state.focusId) { _, new in
             state.showingIntegrationDetail = false
+            state.selectedEditorWorkspaceId = nil
             activeDiffId = nil
             #if !APPSTORE
             withAnimation(.easeIn(duration: 0.16)) { state.showingPlanDetail = false }
@@ -202,6 +219,7 @@ struct OverviewView: View {
         .onChange(of: state.view) { _, v in
             if v != .overview {
                 state.showingIntegrationDetail = false
+                state.selectedEditorWorkspaceId = nil
                 state.showingPlanDetail = false
                 activeDiffId = nil
             }
@@ -210,6 +228,7 @@ struct OverviewView: View {
         .onChange(of: state.mode) { _, m in
             if m != .expanded {
                 state.showingIntegrationDetail = false
+                state.selectedEditorWorkspaceId = nil
                 #if !APPSTORE
                 state.showingPlanDetail = false
                 #endif
@@ -220,6 +239,9 @@ struct OverviewView: View {
             }
             if m == .expanded && state.focusId == "integration_huggingface" {
                 HuggingFacePoller.shared.refreshIfStale()
+            }
+            if m == .expanded && (state.focusId == "agent_vscodium" || state.focusId == "agent_zed") {
+                EditorInspector.refreshAsync()
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .islandToggleDiff)) { _ in
@@ -2301,6 +2323,11 @@ struct IntegrationCardView: View {
                 withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) { showingDetail = false }
             }
             .transition(.opacity)
+        } else if showingDetail && (task.id == "agent_vscodium" || task.id == "agent_zed") {
+            EditorWorkspacesLeftCardView(task: task, state: appState) {
+                withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) { showingDetail = false }
+            }
+            .transition(.opacity)
         } else if showingDetail && vercelHasActivity {
             VercelDetailView(deployment: appState.vercelDeployments[0]) {
                 withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) { showingDetail = false }
@@ -2400,7 +2427,7 @@ struct IntegrationCardView: View {
             SpotifyCardView()
                 .transition(.opacity)
             #endif
-        } else if agentSessionActive {
+        } else if agentSessionActive && task.id != "agent_vscodium" && task.id != "agent_zed" {
             // Active session view — reuse overview layout
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 6) {
@@ -2464,6 +2491,41 @@ struct IntegrationCardView: View {
                 }
                 .padding(.leading, 108)
                 .padding(.top, 2)
+
+                if task.id == "agent_vscodium" || task.id == "agent_zed" {
+                    let summary = appState.editorSummary
+                    let isZed = task.id == "agent_zed"
+                    let wsWindows = summary.openWindows.filter { isZed ? $0.editor == "Zed" : ($0.editor == "VSCodium" || $0.editor == "Code") }
+                    let totalAgents = wsWindows.reduce(0) { $0 + $1.agents.count }
+
+                    Button(action: {
+                        withAnimation(.spring(response: 0.28, dampingFraction: 0.82)) { showingDetail = true }
+                    }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "folder.fill")
+                                .font(.system(size: 8.5))
+                                .foregroundColor(Color(hex: task.color))
+                            Text("\(wsWindows.count) Workspace\(wsWindows.count == 1 ? "" : "s")")
+                                .font(.system(size: 10.5, weight: .medium))
+                                .foregroundColor(Color(hex: "#C5C8CD"))
+                            if totalAgents > 0 {
+                                Text("• \(totalAgents) agent\(totalAgents == 1 ? "" : "s")")
+                                    .font(.system(size: 9.5))
+                                    .foregroundColor(Color(hex: "#22C55E"))
+                            }
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 7))
+                                .foregroundColor(Color(hex: "#6B7079"))
+                        }
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(Color.white.opacity(0.06))
+                        .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.leading, 108)
+                    .padding(.top, 2)
+                }
 
                 HStack(spacing: 8) {
                     if task.id == "integration_claude", task.hostApp != nil {
@@ -3082,6 +3144,274 @@ private struct GitHubStatRow: View {
             .frame(maxWidth: .infinity)
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Editor Workspaces & Multi-Agent Views
+
+struct EditorWorkspacesLeftCardView: View {
+    let task: AgentTask
+    @ObservedObject var state: AppState
+    let onBack: () -> Void
+
+    private var editorName: String {
+        if task.id == "agent_zed" { return "Zed" }
+        return "VSCodium"
+    }
+
+    private var summary: EditorInspectionSummary {
+        state.editorSummary
+    }
+
+    private var windows: [OpenEditorWindow] {
+        if editorName == "Zed" {
+            return summary.openWindows.filter { $0.editor == "Zed" }
+        } else {
+            return summary.openWindows.filter { $0.editor == "VSCodium" || $0.editor == "Code" }
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header: < Editor Workspaces & count
+            HStack(spacing: 6) {
+                Button(action: onBack) {
+                    HStack(spacing: 3) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 8, weight: .medium))
+                        Text("\(editorName) Workspaces")
+                            .font(.system(size: 12, weight: .semibold))
+                    }
+                    .foregroundColor(Color(hex: "#F5F6F8"))
+                }
+                .buttonStyle(.plain)
+
+                Spacer(minLength: 2)
+
+                Text("\(windows.count)")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(Color(hex: "#8E939C"))
+                    .monospacedDigit()
+            }
+            .padding(.top, 6)
+            .padding(.leading, 108)
+            .padding(.trailing, 12)
+
+            // Workspaces list
+            if windows.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("No open \(editorName) workspaces")
+                        .font(.system(size: 10.5))
+                        .foregroundColor(Color(hex: "#6B7079"))
+                    Text("Open a folder or project in \(editorName)")
+                        .font(.system(size: 9.5))
+                        .foregroundColor(Color(hex: "#4D5159"))
+                }
+                .padding(.top, 12)
+                .padding(.leading, 108)
+            } else {
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(windows) { ws in
+                            let isSelected = (state.selectedEditorWorkspaceId == ws.id) ||
+                                (state.selectedEditorWorkspaceId == nil && ws.id == windows.first?.id)
+
+                            Button(action: {
+                                withAnimation(.easeInOut(duration: 0.15)) {
+                                    state.selectedEditorWorkspaceId = ws.id
+                                }
+                                SoundEngine.shared.play("blip")
+                            }) {
+                                HStack(spacing: 6) {
+                                    Circle()
+                                        .fill(ws.agents.isEmpty ? Color(hex: "#6B7079") : Color(hex: "#22C55E"))
+                                        .frame(width: 5, height: 5)
+
+                                    Text(ws.workspaceName)
+                                        .font(.system(size: 11, weight: isSelected ? .semibold : .medium))
+                                        .foregroundColor(isSelected ? Color(hex: "#F5F6F8") : Color(hex: "#C5C8CD"))
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                        .layoutPriority(1)
+
+                                    Spacer(minLength: 4)
+
+                                    if !ws.agents.isEmpty {
+                                        Text("\(ws.agents.count)")
+                                            .font(.system(size: 9.5, weight: .semibold))
+                                            .foregroundColor(Color(hex: "#22C55E"))
+                                            .monospacedDigit()
+                                    } else {
+                                        Text("idle")
+                                            .font(.system(size: 9))
+                                            .foregroundColor(Color(hex: "#6B7079"))
+                                    }
+                                }
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(isSelected ? Color.white.opacity(0.12) : Color.white.opacity(0.02))
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .frame(maxHeight: state.showingIntegrationDetail ? 165 : 60)
+                .padding(.top, 4)
+                .padding(.leading, 108)
+                .padding(.trailing, 8)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .padding(.top, 4)
+        .clipped()
+        .onAppear {
+            if state.selectedEditorWorkspaceId == nil {
+                state.selectedEditorWorkspaceId = windows.first?.id
+            }
+        }
+    }
+}
+
+struct EditorWorkspaceAgentsRightCardView: View {
+    @ObservedObject var state: AppState
+    let editorTask: AgentTask?
+
+    private var editorName: String {
+        if editorTask?.id == "agent_zed" { return "Zed" }
+        return "VSCodium"
+    }
+
+    private var summary: EditorInspectionSummary {
+        state.editorSummary
+    }
+
+    private var selectedWorkspace: OpenEditorWindow? {
+        let windows: [OpenEditorWindow]
+        if editorName == "Zed" {
+            windows = summary.openWindows.filter { $0.editor == "Zed" }
+        } else {
+            windows = summary.openWindows.filter { $0.editor == "VSCodium" || $0.editor == "Code" }
+        }
+        if let selId = state.selectedEditorWorkspaceId, let match = windows.first(where: { $0.id == selId }) {
+            return match
+        }
+        return windows.first
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header of right card
+            HStack(spacing: 5) {
+                if let ws = selectedWorkspace {
+                    Circle()
+                        .fill(ws.agents.isEmpty ? Color(hex: "#6B7079") : Color(hex: "#22C55E"))
+                        .frame(width: 5, height: 5)
+                    Text("Agents in \(ws.workspaceName)")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(Color(hex: "#F5F6F8"))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .layoutPriority(1)
+                    Spacer(minLength: 2)
+                    Text("\(ws.agents.count) active")
+                        .font(.system(size: 9.5, weight: .medium))
+                        .foregroundColor(ws.agents.isEmpty ? Color(hex: "#6B7079") : Color(hex: "#22C55E"))
+                } else {
+                    Text("Agents")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(Color(hex: "#8E939C"))
+                    Spacer()
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.top, 8)
+            .padding(.bottom, 6)
+
+            Divider()
+                .background(Color.white.opacity(0.08))
+                .padding(.horizontal, 8)
+
+            // Content
+            if let ws = selectedWorkspace {
+                if ws.agents.isEmpty {
+                    VStack(spacing: 6) {
+                        Spacer()
+                        Image(systemName: "terminal")
+                            .font(.system(size: 18))
+                            .foregroundColor(Color(hex: "#4D5159"))
+                        Text("No active agents in \(ws.workspaceName)")
+                            .font(.system(size: 10.5))
+                            .foregroundColor(Color(hex: "#6B7079"))
+                        Text("Run claude, codex, or cline in this workspace")
+                            .font(.system(size: 9))
+                            .foregroundColor(Color(hex: "#4D5159"))
+                            .multilineTextAlignment(.center)
+                        Spacer()
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 8)
+                } else {
+                    ScrollView(.vertical, showsIndicators: false) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            ForEach(ws.agents) { ag in
+                                HStack(spacing: 6) {
+                                    Circle()
+                                        .fill(Color(hex: "#22C55E"))
+                                        .frame(width: 5, height: 5)
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        HStack(spacing: 4) {
+                                            Text(ag.type)
+                                                .font(.system(size: 10.5, weight: .semibold))
+                                                .foregroundColor(Color(hex: "#F5F6F8"))
+                                            Text("PID \(ag.pid)")
+                                                .font(.system(size: 8.5))
+                                                .foregroundColor(Color(hex: "#8E939C"))
+                                                .monospacedDigit()
+                                        }
+                                        HStack(spacing: 6) {
+                                            Text("RAM \(String(format: "%.0f", ag.ramMB))MB")
+                                                .font(.system(size: 8.5))
+                                                .foregroundColor(Color(hex: "#6B7079"))
+                                                .monospacedDigit()
+                                            Text("CPU \(String(format: "%.0f", ag.cpuPercent))%")
+                                                .font(.system(size: 8.5))
+                                                .foregroundColor(Color(hex: "#6B7079"))
+                                                .monospacedDigit()
+                                        }
+                                    }
+                                    Spacer(minLength: 2)
+                                    Text("Running")
+                                        .font(.system(size: 8.5, weight: .medium))
+                                        .foregroundColor(Color(hex: "#22C55E"))
+                                        .padding(.horizontal, 5)
+                                        .padding(.vertical, 1.5)
+                                        .background(Color(hex: "#22C55E").opacity(0.12))
+                                        .clipShape(Capsule())
+                                }
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3.5)
+                                .background(Color.white.opacity(0.04))
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                            }
+                        }
+                        .padding(.top, 4)
+                        .padding(.horizontal, 8)
+                    }
+                    .frame(maxHeight: 150)
+                }
+            } else {
+                VStack(spacing: 6) {
+                    Spacer()
+                    Text("No workspace selected")
+                        .font(.system(size: 10))
+                        .foregroundColor(Color(hex: "#6B7079"))
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 
@@ -4772,7 +5102,15 @@ struct AgentPill: View {
 
     // The Claude pill shows "VS Code" (or "Claude Code" for a terminal session) regardless of project name
     private var displayName: String {
-        task.id == "integration_claude" ? ClaudeHost.pillName(hostApp: task.hostApp) : task.name
+        if task.id == "integration_claude" {
+            return ClaudeHost.pillName(hostApp: task.hostApp)
+        } else if task.id == "agent_vscodium" {
+            return "VSCodium"
+        } else if task.id == "agent_zed" {
+            return "Zed"
+        } else {
+            return task.name
+        }
     }
 
     var body: some View {

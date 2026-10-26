@@ -73,11 +73,42 @@ public struct EditorInspectionSummary: Sendable {
 
 public enum EditorInspector {
 
-    // MARK: - Telemetry Cache (2.0s TTL)
+    // MARK: - Background Poller & Telemetry Cache
+    private static let pollerLock = NSLock()
+    nonisolated(unsafe) private static var pollerTimer: DispatchSourceTimer?
+    nonisolated(unsafe) public static var onUpdate: (@MainActor @Sendable (EditorInspectionSummary) -> Void)?
     private static let cacheLock = NSLock()
     nonisolated(unsafe) private static var cachedSummary: EditorInspectionSummary?
     nonisolated(unsafe) private static var lastInspectionTime: TimeInterval = 0
     private static let cacheTTL: TimeInterval = 2.0
+
+    /// Starts a recurring background poller every 3s that updates AppState.shared.editorSummary without blocking the main UI thread.
+    public static func startPoller() {
+        pollerLock.lock()
+        defer { pollerLock.unlock() }
+        guard pollerTimer == nil else { return }
+
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .background))
+        timer.schedule(deadline: .now(), repeating: .seconds(3), leeway: .milliseconds(500))
+        timer.setEventHandler {
+            let fresh = performInspection()
+            DispatchQueue.main.async {
+                onUpdate?(fresh)
+            }
+        }
+        timer.resume()
+        pollerTimer = timer
+    }
+
+    /// Triggers an immediate asynchronous background inspection.
+    public static func refreshAsync() {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let fresh = performInspection()
+            DispatchQueue.main.async {
+                onUpdate?(fresh)
+            }
+        }
+    }
 
     /// Inspects open VSCodium, Zed, and VS Code windows, along with all AI agents running inside them.
     public static func inspectEditorsAndAgents() -> EditorInspectionSummary {
@@ -100,8 +131,47 @@ public enum EditorInspector {
     }
 
     private static func performInspection() -> EditorInspectionSummary {
-        // 1. Detect open editor windows via Quartz Window Server
         var windows: [OpenEditorWindow] = []
+
+        // 1a. Detect VSCodium active workspaces directly from storage.json (fast, zero permissions needed)
+        let codiumStorage = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/VSCodium/User/globalStorage/storage.json")
+        if let data = try? Data(contentsOf: codiumStorage),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let backup = json["backupWorkspaces"] as? [String: Any],
+           let folders = backup["folders"] as? [[String: Any]] {
+            for f in folders {
+                if let uriStr = f["folderUri"] as? String,
+                   let url = URL(string: uriStr) {
+                    let path = url.path
+                    let name = url.lastPathComponent
+                    if !name.isEmpty && !windows.contains(where: { $0.workspaceName == name }) {
+                        windows.append(OpenEditorWindow(editor: "VSCodium", title: name, workspaceName: name, workspacePath: path))
+                    }
+                }
+            }
+        }
+
+        // 1b. Detect VS Code active workspaces if present
+        let vscodeStorage = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/Code/User/globalStorage/storage.json")
+        if let data = try? Data(contentsOf: vscodeStorage),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let backup = json["backupWorkspaces"] as? [String: Any],
+           let folders = backup["folders"] as? [[String: Any]] {
+            for f in folders {
+                if let uriStr = f["folderUri"] as? String,
+                   let url = URL(string: uriStr) {
+                    let path = url.path
+                    let name = url.lastPathComponent
+                    if !name.isEmpty && !windows.contains(where: { $0.workspaceName == name }) {
+                        windows.append(OpenEditorWindow(editor: "VSCodium", title: name, workspaceName: name, workspacePath: path))
+                    }
+                }
+            }
+        }
+
+        // 1c. Complement with Quartz Window Server for Zed and windows with titles
         let options = CGWindowListOption([.optionAll])
         if let list = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] {
             for win in list {
@@ -115,14 +185,20 @@ public enum EditorInspector {
                 if ["VSCodium", "Code", "Zed"].contains(owner) && !title.isEmpty {
                     var wsName = title
                     if title.contains(" — ") {
-                        let parts = title.components(separatedBy: " — ")
+                        var parts = title.components(separatedBy: " — ")
+                        if let last = parts.last?.trimmingCharacters(in: .whitespaces),
+                           ["VSCodium", "Code", "Visual Studio Code", "Zed"].contains(last) {
+                            parts.removeLast()
+                        }
                         if owner == "Zed" {
-                            wsName = parts.count > 1 ? parts[parts.count - 2] : parts[0]
+                            wsName = parts.count > 1 ? parts[parts.count - 1].trimmingCharacters(in: .whitespaces) : parts[0].trimmingCharacters(in: .whitespaces)
                         } else {
                             wsName = parts.last?.trimmingCharacters(in: .whitespaces) ?? title
                         }
                     }
-                    windows.append(OpenEditorWindow(editor: owner, title: title, workspaceName: wsName))
+                    if !windows.contains(where: { $0.workspaceName == wsName }) {
+                        windows.append(OpenEditorWindow(editor: owner, title: title, workspaceName: wsName))
+                    }
                 }
             }
         }

@@ -24,6 +24,7 @@ final class AppState: ObservableObject {
     var noteMessage: String? = nil
     var ollamaServerURL: String = "http://localhost:11434"
     var lmstudioServerURL: String = "http://localhost:1234"
+    var editorSummary: EditorInspectionSummary = EditorInspectionSummary(openWindows: [], standaloneAgents: [], totalAgentsCount: 0, formattedReport: "")
 }
 
 @MainActor

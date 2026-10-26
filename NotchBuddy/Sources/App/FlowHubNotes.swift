@@ -1,5 +1,6 @@
 #if !APPSTORE
 import AppKit
+import AVFoundation
 import SwiftUI
 
 /// Coucou Flow → Notetaker: the calls on the left, the one chosen on the right.
@@ -362,6 +363,9 @@ private struct HubNoteDetail: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 header
+                if let audioURL = taker.audioURL(for: note.id), FileManager.default.fileExists(atPath: audioURL.path) {
+                    HubAudioPlayerBar(url: audioURL)
+                }
                 if note.status == .processing || taker.working.contains(note.id) && note.lines.isEmpty {
                     HStack(spacing: 10) {
                         ProgressView().controlSize(.small)
@@ -649,4 +653,113 @@ struct HubSummaryEnginePicker: View {
         }
     }
 }
+// MARK: - Audio Player Bar
+
+private struct HubAudioPlayerBar: View {
+    let url: URL
+    @StateObject private var player = AudioPlayerState()
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Button(action: { player.toggle(url: url) }) {
+                Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundColor(Color(hex: "#0B0C0E"))
+                    .frame(width: 32, height: 32)
+                    .background(Color(hex: "#F5F6F8"))
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Slider(value: Binding(get: { player.currentTime }, set: { player.seek(to: $0) }), in: 0...max(1, player.duration))
+                    .tint(Color(hex: "#3B82F6"))
+
+                HStack {
+                    Text(formatTime(player.currentTime))
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(HubTheme.secondary)
+                    Spacer()
+                    Text(formatTime(player.duration))
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(HubTheme.muted)
+                }
+            }
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(HubTheme.card))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(HubTheme.line))
+        .onAppear { player.load(url: url) }
+        .onDisappear { player.stop() }
+    }
+
+    private func formatTime(_ s: Double) -> String {
+        let mins = Int(s) / 60
+        let secs = Int(s) % 60
+        return String(format: "%02d:%02d", mins, secs)
+    }
+}
+
+@MainActor
+private final class AudioPlayerState: NSObject, ObservableObject, AVAudioPlayerDelegate {
+    @Published var isPlaying = false
+    @Published var currentTime: Double = 0
+    @Published var duration: Double = 1
+    private var player: AVAudioPlayer?
+    private var timer: Timer?
+
+    func load(url: URL) {
+        stop()
+        guard let p = try? AVAudioPlayer(contentsOf: url) else { return }
+        p.delegate = self
+        p.prepareToPlay()
+        player = p
+        duration = max(1, p.duration)
+    }
+
+    func toggle(url: URL) {
+        if player == nil { load(url: url) }
+        guard let p = player else { return }
+        if isPlaying {
+            p.pause()
+            isPlaying = false
+            timer?.invalidate()
+        } else {
+            p.play()
+            isPlaying = true
+            timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    guard let self, let p = self.player else { return }
+                    self.currentTime = p.currentTime
+                    if !p.isPlaying {
+                        self.isPlaying = false
+                        self.timer?.invalidate()
+                    }
+                }
+            }
+        }
+    }
+
+    func seek(to time: Double) {
+        player?.currentTime = time
+        currentTime = time
+    }
+
+    func stop() {
+        timer?.invalidate()
+        player?.stop()
+        player = nil
+        isPlaying = false
+        currentTime = 0
+    }
+
+    nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        Task { @MainActor [weak self] in
+            self?.isPlaying = false
+            self?.currentTime = 0
+            self?.timer?.invalidate()
+        }
+    }
+}
+
 #endif

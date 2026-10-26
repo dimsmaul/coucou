@@ -145,12 +145,27 @@ final class Parakeet: ObservableObject {
     }
 
     func transcribeWithTimings(_ samples: [Float]) async throws -> ASRResult {
+        // Drop pure silence or low-level noise to prevent multilingual token hallucination
+        let rms = ChannelRecorder.rms(samples[...])
+        guard rms >= 0.012 else {
+            return ASRResult(text: "", confidence: 1.0, duration: 0, processingTime: 0)
+        }
+
         var audio = samples
         // Parakeet wants at least a second, and a little silence at the end keeps the last word.
         audio.append(contentsOf: [Float](repeating: 0, count: max(4_800, 16_000 - audio.count)))
         let asr = try await manager()
         var decoder = TdtDecoderState.make(decoderLayers: await asr.decoderLayerCount)
-        return try await asr.transcribe(audio, decoderState: &decoder)
+        let result = try await asr.transcribe(audio, decoderState: &decoder)
+
+        // Drop hallucinated Cyrillic/Russian loops when user system language is not Russian
+        let isRussianLocale = Locale.current.language.languageCode?.identifier == "ru"
+        let containsCyrillic = result.text.unicodeScalars.contains { $0.value >= 0x0400 && $0.value <= 0x04FF }
+        if containsCyrillic && !isRussianLocale {
+            return ASRResult(text: "", confidence: 1.0, duration: 0, processingTime: 0)
+        }
+
+        return result
     }
 }
 

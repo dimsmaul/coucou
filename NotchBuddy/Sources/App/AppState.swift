@@ -550,6 +550,15 @@ final class AppState: ObservableObject {
     @Published var showingPlanDetail: Bool = false
     /// True when an integration card (such as GitHub PR detail) is expanded into detail view.
     @Published var showingIntegrationDetail: Bool = false
+    /// Selected workspace window ID when viewing editor workspaces detail.
+    @Published var selectedEditorWorkspaceId: String? = nil
+    /// Cached editor and multi-agent summary updated on background thread.
+    @Published var editorSummary: EditorInspectionSummary = EditorInspectionSummary(
+        openWindows: [],
+        standaloneAgents: [],
+        totalAgentsCount: 0,
+        formattedReport: ""
+    )
 
     // Codex plan gauge (from `codex app-server`) — fetched when the pill shows
     @Published var showCodexPlanInNotch: Bool = false {

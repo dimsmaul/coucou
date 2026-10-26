@@ -1130,7 +1130,9 @@ final class HookServer: @unchecked Sendable {
         let state = AppState.shared
         if let idx = state.tasks.firstIndex(where: { $0.id == id }) {
             guard sessions.ownsDisplay(pill: id, session: session) else { return }
-            state.tasks[idx].name = projectName
+            if id != "agent_vscodium" && id != "agent_zed" {
+                state.tasks[idx].name = projectName
+            }
             if !cwd.isEmpty { state.tasks[idx].sessionCwd = cwd }
             if id == "integration_claude" { state.tasks[idx].hostApp = hostApp }
             if !bundleId.isEmpty { state.tasks[idx].sessionBundleId = bundleId }
@@ -1140,7 +1142,8 @@ final class HookServer: @unchecked Sendable {
         let def = PillCatalog.definition(for: id)
         let color = def?.color ?? "#C0C4CC"
         let source = def?.source ?? .agent
-        var task = AgentTask(id: id, name: projectName, color: color,
+        let taskName = (id == "agent_vscodium" ? "VSCodium" : (id == "agent_zed" ? "Zed" : projectName))
+        var task = AgentTask(id: id, name: taskName, color: color,
                              state: .idle, steps: [], source: source, isIntegration: true)
         if id == "integration_claude" { task.hostApp = hostApp }
         if !bundleId.isEmpty { task.sessionBundleId = bundleId }

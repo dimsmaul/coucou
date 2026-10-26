@@ -17,6 +17,8 @@ enum IslandView: String, CaseIterable {
     case capture      // a screen capture just taken (⌃⌥X): paste, copy, annotate, ask Claude
     case pouch        // file shelf: files dropped on the notch, waiting to be dragged out
     case pomodoro     // focus timer & stopwatch
+    case recordHub    // meeting, screen and window recording hub
+    case notes        // markdown notes & interactive checklist
 }
 
 // MARK: - Bot State
@@ -277,6 +279,10 @@ enum IslandConst {
         .pouch:        ViewLayout(height: 240, botX: 58,  botY: 101, botDiameter: 52, agentMode: .none),
         // Pomodoro: Focus timer and stopwatch layout inside island
         .pomodoro:     ViewLayout(height: 160, botX: 68,  botY: nil, botDiameter: 58, agentMode: .none),
+        // Record Hub: Meeting & screen recording menu and active status
+        .recordHub:    ViewLayout(height: 220, botX: 68,  botY: nil, botDiameter: 58, agentMode: .none),
+        // Notes: Markdown scratchpad & interactive checklist (expanded height)
+        .notes:        ViewLayout(height: 440, botX: 68,  botY: nil, botDiameter: 0,  agentMode: .none),
     ]
 
     // Project colors — keyed by lowercase display name or slug
